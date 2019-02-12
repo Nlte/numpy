@@ -1,0 +1,9 @@
+[user]
+	name = Nathanael Leaute
+	email = nathanael@bynder.com
+[alias]
+	wdiff = diff --color-words
+[core]
+	editor = vim
+[merge]
+	summary = true
