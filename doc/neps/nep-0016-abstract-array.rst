@@ -1,3 +1,5 @@
+.. _NEP16:
+
 =============================================================
 NEP 16 — An abstract base class for identifying "duck arrays"
 =============================================================
@@ -266,7 +268,7 @@ array, then they'll get a segfault. Right now, in the same situation,
 ``asarray`` will instead invoke the object's ``__array__`` method, or
 use the buffer interface to make a view, or pass through an array with
 object dtype, or raise an error, or similar. Probably none of these
-outcomes are actually desireable in most cases, so maybe making it a
+outcomes are actually desirable in most cases, so maybe making it a
 segfault instead would be OK? But it's dangerous given that we don't
 know how common such code is. OTOH, if we were starting from scratch
 then this would probably be the ideal solution.

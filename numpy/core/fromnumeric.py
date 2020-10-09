@@ -1,19 +1,17 @@
 """Module containing non-deprecated functions borrowed from Numeric.
 
 """
-from __future__ import division, absolute_import, print_function
-
 import functools
 import types
 import warnings
 
 import numpy as np
-from .. import VisibleDeprecationWarning
 from . import multiarray as mu
 from . import overrides
 from . import umath as um
 from . import numerictypes as nt
-from .numeric import asarray, array, asanyarray, concatenate
+from ._asarray import asarray, array, asanyarray
+from .multiarray import concatenate
 from . import _methods
 
 _dt_ = nt.sctype2char
@@ -24,7 +22,7 @@ __all__ = [
     'argmin', 'argpartition', 'argsort', 'around', 'choose', 'clip',
     'compress', 'cumprod', 'cumproduct', 'cumsum', 'diagonal', 'mean',
     'ndim', 'nonzero', 'partition', 'prod', 'product', 'ptp', 'put',
-    'rank', 'ravel', 'repeat', 'reshape', 'resize', 'round_',
+    'ravel', 'repeat', 'reshape', 'resize', 'round_',
     'searchsorted', 'shape', 'size', 'sometrue', 'sort', 'squeeze',
     'std', 'sum', 'swapaxes', 'take', 'trace', 'transpose', 'var',
 ]
@@ -52,17 +50,20 @@ def _wrapit(obj, method, *args, **kwds):
 
 
 def _wrapfunc(obj, method, *args, **kwds):
+    bound = getattr(obj, method, None)
+    if bound is None:
+        return _wrapit(obj, method, *args, **kwds)
+
     try:
-        return getattr(obj, method)(*args, **kwds)
-
-    # An AttributeError occurs if the object does not have
-    # such a method in its class.
-
-    # A TypeError occurs if the object does have such a method
-    # in its class, but its signature is not identical to that
-    # of NumPy's. This situation has occurred in the case of
-    # a downstream library like 'pandas'.
-    except (AttributeError, TypeError):
+        return bound(*args, **kwds)
+    except TypeError:
+        # A TypeError occurs if the object does have such a method in its
+        # class, but its signature is not identical to that of NumPy's. This
+        # situation has occurred in the case of a downstream library like
+        # 'pandas'.
+        #
+        # Call _wrapit from within the except clause to ensure a potential
+        # exception has a traceback chain.
         return _wrapit(obj, method, *args, **kwds)
 
 
@@ -127,7 +128,8 @@ def take(a, indices, axis=None, out=None, mode='raise'):
         input array is used.
     out : ndarray, optional (Ni..., Nj..., Nk...)
         If provided, the result will be placed in this array. It should
-        be of the appropriate shape and dtype.
+        be of the appropriate shape and dtype. Note that `out` is always
+        buffered if `mode='raise'`; use other modes for better performance.
     mode : {'raise', 'wrap', 'clip'}, optional
         Specifies how out-of-bounds indices will behave.
 
@@ -250,7 +252,8 @@ def reshape(a, newshape, order='C'):
      >>> c.shape = (20)
      Traceback (most recent call last):
         ...
-     AttributeError: incompatible shape for a non-contiguous array
+     AttributeError: Incompatible shape for in-place modification. Use
+     `.reshape()` to make a copy with the desired shape.
 
     The `order` keyword gives the index ordering both for *fetching* the values
     from `a`, and then *placing* the values into the output array.
@@ -298,8 +301,7 @@ def reshape(a, newshape, order='C'):
 
 def _choose_dispatcher(a, choices, out=None, mode=None):
     yield a
-    for c in choices:
-        yield c
+    yield from choices
     yield out
 
 
@@ -352,7 +354,8 @@ def choose(a, choices, out=None, mode='raise'):
         ``choices.shape[0]``) is taken as defining the "sequence".
     out : array, optional
         If provided, the result will be inserted into this array. It should
-        be of the appropriate shape and dtype.
+        be of the appropriate shape and dtype. Note that `out` is always
+        buffered if `mode='raise'`; use other modes for better performance.
     mode : {'raise' (default), 'wrap', 'clip'}, optional
         Specifies how indices outside `[0, n-1]` will be treated:
 
@@ -374,6 +377,7 @@ def choose(a, choices, out=None, mode='raise'):
     See Also
     --------
     ndarray.choose : equivalent method
+    numpy.take_along_axis : Preferable if `choices` is an array
 
     Notes
     -----
@@ -455,6 +459,7 @@ def repeat(a, repeats, axis=None):
     See Also
     --------
     tile : Tile an array.
+    unique : Find the unique elements of an array.
 
     Examples
     --------
@@ -509,7 +514,8 @@ def put(a, ind, v, mode='raise'):
 
         'clip' mode means that all indices that are too large are replaced
         by the index that addresses the last element along that axis. Note
-        that this disables indexing with negative numbers.
+        that this disables indexing with negative numbers. In 'raise' mode,
+        if an exception occurs the target array may still be modified.
 
     See Also
     --------
@@ -531,9 +537,9 @@ def put(a, ind, v, mode='raise'):
     """
     try:
         put = a.put
-    except AttributeError:
+    except AttributeError as e:
         raise TypeError("argument 1 must be numpy.ndarray, "
-                        "not {name}".format(name=type(a).__name__))
+                        "not {name}".format(name=type(a).__name__)) from e
 
     return put(ind, v, mode=mode)
 
@@ -596,15 +602,20 @@ def _transpose_dispatcher(a, axes=None):
 @array_function_dispatch(_transpose_dispatcher)
 def transpose(a, axes=None):
     """
-    Permute the dimensions of an array.
+    Reverse or permute the axes of an array; returns the modified array.
+
+    For an array a with two axes, transpose(a) gives the matrix transpose.
 
     Parameters
     ----------
     a : array_like
         Input array.
-    axes : list of ints, optional
-        By default, reverse the dimensions, otherwise permute the axes
-        according to the values given.
+    axes : tuple or list of ints, optional
+        If specified, it must be a tuple or list which contains a permutation of
+        [0,1,..,N-1] where N is the number of axes of a.  The i'th axis of the
+        returned array will correspond to the axis numbered ``axes[i]`` of the
+        input.  If not specified, defaults to ``range(a.ndim)[::-1]``, which
+        reverses the order of the axes.
 
     Returns
     -------
@@ -638,6 +649,10 @@ def transpose(a, axes=None):
     >>> x = np.ones((1, 2, 3))
     >>> np.transpose(x, (1, 0, 2)).shape
     (2, 1, 3)
+
+    >>> x = np.ones((2, 3, 4, 5))
+    >>> np.transpose(x).shape
+    (5, 4, 3, 2)
 
     """
     return _wrapfunc(a, 'transpose', axes)
@@ -788,7 +803,9 @@ def argpartition(a, kth, axis=-1, kind='introselect', order=None):
     --------
     partition : Describes partition algorithms used.
     ndarray.partition : Inplace partition.
-    argsort : Full indirect sort
+    argsort : Full indirect sort.
+    take_along_axis : Apply ``index_array`` from argpartition
+                      to an array as if by calling partition.
 
     Notes
     -----
@@ -808,6 +825,14 @@ def argpartition(a, kth, axis=-1, kind='introselect', order=None):
     >>> np.array(x)[np.argpartition(x, 3)]
     array([2, 1, 3, 4])
 
+    Multi-dimensional array:
+
+    >>> x = np.array([[3, 4, 2], [1, 3, 1]])
+    >>> index_array = np.argpartition(x, kth=1, axis=-1)
+    >>> np.take_along_axis(x, index_array, axis=-1)  # same as np.partition(x, kth=1)
+    array([[2, 3, 4],
+           [1, 1, 3]])
+
     """
     return _wrapfunc(a, 'argpartition', kth, axis=axis, kind=kind, order=order)
 
@@ -817,7 +842,7 @@ def _sort_dispatcher(a, axis=None, kind=None, order=None):
 
 
 @array_function_dispatch(_sort_dispatcher)
-def sort(a, axis=-1, kind='quicksort', order=None):
+def sort(a, axis=-1, kind=None, order=None):
     """
     Return a sorted copy of an array.
 
@@ -828,8 +853,15 @@ def sort(a, axis=-1, kind='quicksort', order=None):
     axis : int or None, optional
         Axis along which to sort. If None, the array is flattened before
         sorting. The default is -1, which sorts along the last axis.
-    kind : {'quicksort', 'mergesort', 'heapsort', 'timsort', 'stable'}, optional
-        Sorting algorithm. Default is 'quicksort'.
+    kind : {'quicksort', 'mergesort', 'heapsort', 'stable'}, optional
+        Sorting algorithm. The default is 'quicksort'. Note that both 'stable'
+        and 'mergesort' use timsort or radix sort under the covers and, in general,
+        the actual implementation will vary with data type. The 'mergesort' option
+        is retained for backwards compatibility.
+
+        .. versionchanged:: 1.15.0.
+           The 'stable' option was added.
+
     order : str or list of str, optional
         When `a` is an array with fields defined, this argument specifies
         which fields to compare first, second, etc.  A single field can
@@ -855,17 +887,21 @@ def sort(a, axis=-1, kind='quicksort', order=None):
     The various sorting algorithms are characterized by their average speed,
     worst case performance, work space size, and whether they are stable. A
     stable sort keeps items with the same key in the same relative
-    order. The four available algorithms have the following
+    order. The four algorithms implemented in NumPy have the following
     properties:
 
     =========== ======= ============= ============ ========
        kind      speed   worst case    work space   stable
     =========== ======= ============= ============ ========
     'quicksort'    1     O(n^2)            0          no
-    'mergesort'    2     O(n*log(n))      ~n/2        yes
     'heapsort'     3     O(n*log(n))       0          no
+    'mergesort'    2     O(n*log(n))      ~n/2        yes
     'timsort'      2     O(n*log(n))      ~n/2        yes
     =========== ======= ============= ============ ========
+
+    .. note:: The datatype determines which of 'mergesort' or 'timsort'
+       is actually used, even if 'mergesort' is specified. User selection
+       at a finer scale is not currently available.
 
     All the sort algorithms make temporary copies of the data when
     sorting along any but the last axis.  Consequently, sorting along
@@ -890,20 +926,34 @@ def sort(a, axis=-1, kind='quicksort', order=None):
 
     .. versionadded:: 1.12.0
 
-    quicksort has been changed to an introsort which will switch
-    heapsort when it does not make enough progress. This makes its
-    worst case O(n*log(n)).
+    quicksort has been changed to `introsort <https://en.wikipedia.org/wiki/Introsort>`_.
+    When sorting does not make enough progress it switches to
+    `heapsort <https://en.wikipedia.org/wiki/Heapsort>`_.
+    This implementation makes quicksort O(n*log(n)) in the worst case.
 
-    'stable' automatically choses the best stable sorting algorithm
-    for the data type being sorted. It is currently mapped to timsort.
+    'stable' automatically chooses the best stable sorting algorithm
+    for the data type being sorted.
+    It, along with 'mergesort' is currently mapped to
+    `timsort <https://en.wikipedia.org/wiki/Timsort>`_
+    or `radix sort <https://en.wikipedia.org/wiki/Radix_sort>`_
+    depending on the data type.
+    API forward compatibility currently limits the
+    ability to select the implementation and it is hardwired for the different
+    data types.
 
     .. versionadded:: 1.17.0
+
     Timsort is added for better performance on already or nearly
     sorted data. On random data timsort is almost identical to
     mergesort. It is now used for stable sort while quicksort is still the
-    default sort if none is chosen. For details of timsort, refer to
+    default sort if none is chosen. For timsort details, refer to
     `CPython listsort.txt <https://github.com/python/cpython/blob/3.7/Objects/listsort.txt>`_.
+    'mergesort' and 'stable' are mapped to radix sort for integer data types. Radix sort is an
+    O(n) sort instead of O(n log n).
 
+    .. versionchanged:: 1.18.0
+
+    NaT now sorts to the end of arrays for consistency with NaN.
 
     Examples
     --------
@@ -952,7 +1002,7 @@ def _argsort_dispatcher(a, axis=None, kind=None, order=None):
 
 
 @array_function_dispatch(_argsort_dispatcher)
-def argsort(a, axis=-1, kind='quicksort', order=None):
+def argsort(a, axis=-1, kind=None, order=None):
     """
     Returns the indices that would sort an array.
 
@@ -967,8 +1017,14 @@ def argsort(a, axis=-1, kind='quicksort', order=None):
     axis : int or None, optional
         Axis along which to sort.  The default is -1 (the last axis). If None,
         the flattened array is used.
-    kind : {'quicksort', 'mergesort', 'heapsort', 'timsort', 'stable'}, optional
-        Sorting algorithm.
+    kind : {'quicksort', 'mergesort', 'heapsort', 'stable'}, optional
+        Sorting algorithm. The default is 'quicksort'. Note that both 'stable'
+        and 'mergesort' use timsort under the covers and, in general, the
+        actual implementation will vary with data type. The 'mergesort' option
+        is retained for backwards compatibility.
+
+        .. versionchanged:: 1.15.0.
+           The 'stable' option was added.
     order : str or list of str, optional
         When `a` is an array with fields defined, this argument specifies
         which fields to compare first, second, etc.  A single field can
@@ -990,6 +1046,8 @@ def argsort(a, axis=-1, kind='quicksort', order=None):
     lexsort : Indirect stable sort with multiple keys.
     ndarray.sort : Inplace sort.
     argpartition : Indirect partial sort.
+    take_along_axis : Apply ``index_array`` from argsort
+                      to an array as if by calling sort.
 
     Notes
     -----
@@ -1085,6 +1143,8 @@ def argmax(a, axis=None, out=None):
     ndarray.argmax, argmin
     amax : The maximum value along a given axis.
     unravel_index : Convert a flat index into an index tuple.
+    take_along_axis : Apply ``np.expand_dims(index_array, axis)``
+                      from argmax to an array as if by calling max.
 
     Notes
     -----
@@ -1118,6 +1178,16 @@ def argmax(a, axis=None, out=None):
     array([0, 5, 2, 3, 4, 5])
     >>> np.argmax(b)  # Only the first occurrence is returned.
     1
+
+    >>> x = np.array([[4,2,3], [1,0,3]])
+    >>> index_array = np.argmax(x, axis=-1)
+    >>> # Same as np.max(x, axis=-1, keepdims=True)
+    >>> np.take_along_axis(x, np.expand_dims(index_array, axis=-1), axis=-1)
+    array([[4],
+           [3]])
+    >>> # Same as np.max(x, axis=-1)
+    >>> np.take_along_axis(x, np.expand_dims(index_array, axis=-1), axis=-1).squeeze(axis=-1)
+    array([4, 3])
 
     """
     return _wrapfunc(a, 'argmax', axis=axis, out=out)
@@ -1154,6 +1224,8 @@ def argmin(a, axis=None, out=None):
     ndarray.argmin, argmax
     amin : The minimum value along a given axis.
     unravel_index : Convert a flat index into an index tuple.
+    take_along_axis : Apply ``np.expand_dims(index_array, axis)``
+                      from argmin to an array as if by calling min.
 
     Notes
     -----
@@ -1187,6 +1259,16 @@ def argmin(a, axis=None, out=None):
     array([10, 11, 12, 13, 10, 15])
     >>> np.argmin(b)  # Only the first occurrence is returned.
     0
+
+    >>> x = np.array([[4,2,3], [1,0,3]])
+    >>> index_array = np.argmin(x, axis=-1)
+    >>> # Same as np.min(x, axis=-1, keepdims=True)
+    >>> np.take_along_axis(x, np.expand_dims(index_array, axis=-1), axis=-1)
+    array([[2],
+           [0]])
+    >>> # Same as np.max(x, axis=-1)
+    >>> np.take_along_axis(x, np.expand_dims(index_array, axis=-1), axis=-1).squeeze(axis=-1)
+    array([2, 0])
 
     """
     return _wrapfunc(a, 'argmin', axis=axis, out=out)
@@ -1249,7 +1331,7 @@ def searchsorted(a, v, side='left', sorter=None):
     As of NumPy 1.4.0 `searchsorted` works with real/complex arrays containing
     `nan` values. The enhanced sort order is documented in `sort`.
 
-    This function is a faster version of the builtin python `bisect.bisect_left`
+    This function uses the same algorithm as the builtin python `bisect.bisect_left`
     (``side='left'``) and `bisect.bisect_right` (``side='right'``) functions,
     which is also vectorized in the `v` argument.
 
@@ -1297,10 +1379,17 @@ def resize(a, new_shape):
 
     See Also
     --------
+    np.reshape : Reshape an array without changing the total size.
+    np.pad : Enlarge and pad an array.
+    np.repeat: Repeat elements of an array.
     ndarray.resize : resize an array in-place.
 
     Notes
     -----
+    When the total size of the array does not change `~numpy.reshape` should
+    be used.  In most other cases either indexing (to reduce the size)
+    or padding (to increase the size) may be a more appropriate solution.
+
     Warning: This functionality does **not** consider axes separately,
     i.e. it does not apply interpolation/extrapolation.
     It fills the return array with the required number of elements, taken
@@ -1324,22 +1413,21 @@ def resize(a, new_shape):
     """
     if isinstance(new_shape, (int, nt.integer)):
         new_shape = (new_shape,)
+
     a = ravel(a)
-    Na = len(a)
-    total_size = um.multiply.reduce(new_shape)
-    if Na == 0 or total_size == 0:
-        return mu.zeros(new_shape, a.dtype)
 
-    n_copies = int(total_size / Na)
-    extra = total_size % Na
+    new_size = 1
+    for dim_length in new_shape:
+        new_size *= dim_length
+        if dim_length < 0:
+            raise ValueError('all elements of `new_shape` must be non-negative')
 
-    if extra != 0:
-        n_copies = n_copies + 1
-        extra = Na - extra
+    if a.size == 0 or new_size == 0:
+        # First case must zero fill. The second would have repeats == 0.
+        return np.zeros_like(a, shape=new_shape)
 
-    a = concatenate((a,) * n_copies)
-    if extra > 0:
-        a = a[:-extra]
+    repeats = -(-new_size // a.size)  # ceil division
+    a = concatenate((a,) * repeats)[:new_size]
 
     return reshape(a, new_shape)
 
@@ -1351,7 +1439,7 @@ def _squeeze_dispatcher(a, axis=None):
 @array_function_dispatch(_squeeze_dispatcher)
 def squeeze(a, axis=None):
     """
-    Remove single-dimensional entries from the shape of an array.
+    Remove axes of length one from `a`.
 
     Parameters
     ----------
@@ -1360,7 +1448,7 @@ def squeeze(a, axis=None):
     axis : None or int or tuple of ints, optional
         .. versionadded:: 1.7.0
 
-        Selects a subset of the single-dimensional entries in the
+        Selects a subset of the entries of length one in the
         shape. If an axis is selected with shape entry greater than
         one, an error is raised.
 
@@ -1369,16 +1457,17 @@ def squeeze(a, axis=None):
     squeezed : ndarray
         The input array, but with all or a subset of the
         dimensions of length 1 removed. This is always `a` itself
-        or a view into `a`.
+        or a view into `a`. Note that if all axes are squeezed,
+        the result is a 0d array and not a scalar.
 
     Raises
     ------
     ValueError
-        If `axis` is not `None`, and an axis being squeezed is not of length 1
+        If `axis` is not None, and an axis being squeezed is not of length 1
 
     See Also
     --------
-    expand_dims : The inverse operation, adding singleton dimensions
+    expand_dims : The inverse operation, adding entries of length one
     reshape : Insert, remove, and combine dimensions, and resize existing ones
 
     Examples
@@ -1396,6 +1485,15 @@ def squeeze(a, axis=None):
     ValueError: cannot select an axis to squeeze out which has size not equal to one
     >>> np.squeeze(x, axis=2).shape
     (1, 3)
+    >>> x = np.array([[1234]])
+    >>> x.shape
+    (1, 1)
+    >>> np.squeeze(x)
+    array(1234)  # 0d array
+    >>> np.squeeze(x).shape
+    ()
+    >>> np.squeeze(x)[()]
+    1234
 
     """
     try:
@@ -1502,9 +1600,9 @@ def diagonal(a, offset=0, axis1=0, axis2=1):
             [2, 3]],
            [[4, 5],
             [6, 7]]])
-    >>> a.diagonal(0, # Main diagonals of two arrays created by skipping
-    ...            0, # across the outer(left)-most axis last and
-    ...            1) # the "middle" (row) axis first.
+    >>> a.diagonal(0,  # Main diagonals of two arrays created by skipping
+    ...            0,  # across the outer(left)-most axis last and
+    ...            1)  # the "middle" (row) axis first.
     array([[0, 6],
            [1, 7]])
 
@@ -1512,13 +1610,28 @@ def diagonal(a, offset=0, axis1=0, axis2=1):
     corresponds to fixing the right-most (column) axis, and that the
     diagonals are "packed" in rows.
 
-    >>> a[:,:,0] # main diagonal is [0 6]
+    >>> a[:,:,0]  # main diagonal is [0 6]
     array([[0, 2],
            [4, 6]])
-    >>> a[:,:,1] # main diagonal is [1 7]
+    >>> a[:,:,1]  # main diagonal is [1 7]
     array([[1, 3],
            [5, 7]])
 
+    The anti-diagonal can be obtained by reversing the order of elements
+    using either `numpy.flipud` or `numpy.fliplr`.
+
+    >>> a = np.arange(9).reshape(3, 3)
+    >>> a
+    array([[0, 1, 2],
+           [3, 4, 5],
+           [6, 7, 8]])
+    >>> np.fliplr(a).diagonal()  # Horizontal flip
+    array([2, 4, 6])
+    >>> np.flipud(a).diagonal()  # Vertical flip
+    array([6, 4, 2])
+
+    Note that the order in which the diagonal is retrieved varies depending
+    on the flip function.
     """
     if isinstance(a, np.matrix):
         # Make diagonal of matrix 1-D to preserve backward compatibility.
@@ -1719,17 +1832,19 @@ def nonzero(a):
     Returns a tuple of arrays, one for each dimension of `a`,
     containing the indices of the non-zero elements in that
     dimension. The values in `a` are always tested and returned in
-    row-major, C-style order. The corresponding non-zero
-    values can be obtained with::
+    row-major, C-style order.
 
-        a[nonzero(a)]
+    To group the indices by element, rather than dimension, use `argwhere`,
+    which returns a row for each non-zero element.
 
-    To group the indices by element, rather than dimension, use::
+    .. note::
 
-        transpose(nonzero(a))
+       When called on a zero-d array or scalar, ``nonzero(a)`` is treated
+       as ``nonzero(atleast1d(a))``.
 
-    The result of this is always a 2-D array, with a row for
-    each non-zero element.
+       .. deprecated:: 1.17.0
+
+          Use `atleast1d` explicitly if this behavior is deliberate.
 
     Parameters
     ----------
@@ -1750,6 +1865,12 @@ def nonzero(a):
         Equivalent ndarray method.
     count_nonzero :
         Counts the number of non-zero elements in the input array.
+
+    Notes
+    -----
+    While the nonzero values can be obtained with ``a[nonzero(a)]``, it is
+    recommended to use ``x[x.astype(bool)]`` or ``x[x != 0]`` instead, which
+    will correctly handle 0-d arrays.
 
     Examples
     --------
@@ -1886,8 +2007,8 @@ def compress(condition, a, axis=None, out=None):
     --------
     take, choose, diag, diagonal, select
     ndarray.compress : Equivalent method in ndarray
-    np.extract: Equivalent method when working on 1-D arrays
-    numpy.doc.ufuncs : Section "Output arguments"
+    extract: Equivalent method when working on 1-D arrays
+    :ref:`ufuncs-output-type`
 
     Examples
     --------
@@ -1916,12 +2037,12 @@ def compress(condition, a, axis=None, out=None):
     return _wrapfunc(a, 'compress', condition, axis=axis, out=out)
 
 
-def _clip_dispatcher(a, a_min, a_max, out=None):
+def _clip_dispatcher(a, a_min, a_max, out=None, **kwargs):
     return (a, a_min, a_max)
 
 
 @array_function_dispatch(_clip_dispatcher)
-def clip(a, a_min, a_max, out=None):
+def clip(a, a_min, a_max, out=None, **kwargs):
     """
     Clip (limit) the values in an array.
 
@@ -1930,23 +2051,27 @@ def clip(a, a_min, a_max, out=None):
     is specified, values smaller than 0 become 0, and values larger
     than 1 become 1.
 
+    Equivalent to but faster than ``np.minimum(a_max, np.maximum(a, a_min))``.
+
+    No check is performed to ensure ``a_min < a_max``.
+
     Parameters
     ----------
     a : array_like
         Array containing elements to clip.
-    a_min : scalar or array_like or `None`
-        Minimum value. If `None`, clipping is not performed on lower
-        interval edge. Not more than one of `a_min` and `a_max` may be
-        `None`.
-    a_max : scalar or array_like or `None`
-        Maximum value. If `None`, clipping is not performed on upper
-        interval edge. Not more than one of `a_min` and `a_max` may be
-        `None`. If `a_min` or `a_max` are array_like, then the three
-        arrays will be broadcasted to match their shapes.
+    a_min, a_max : array_like or None
+        Minimum and maximum value. If ``None``, clipping is not performed on
+        the corresponding edge. Only one of `a_min` and `a_max` may be
+        ``None``. Both are broadcast against `a`.
     out : ndarray, optional
         The results will be placed in this array. It may be the input
         array for in-place clipping.  `out` must be of the right shape
         to hold the output.  Its type is preserved.
+    **kwargs
+        For other keyword-only arguments, see the
+        :ref:`ufunc docs <ufuncs.kwargs>`.
+
+        .. versionadded:: 1.17.0
 
     Returns
     -------
@@ -1957,7 +2082,7 @@ def clip(a, a_min, a_max, out=None):
 
     See Also
     --------
-    numpy.doc.ufuncs : Section "Output arguments"
+    :ref:`ufuncs-output-type`
 
     Examples
     --------
@@ -1975,7 +2100,7 @@ def clip(a, a_min, a_max, out=None):
     array([3, 4, 2, 3, 4, 5, 6, 7, 8, 8])
 
     """
-    return _wrapfunc(a, 'clip', a_min, a_max, out=out)
+    return _wrapfunc(a, 'clip', a_min, a_max, out=out, **kwargs)
 
 
 def _sum_dispatcher(a, axis=None, dtype=None, out=None, keepdims=None,
@@ -2046,6 +2171,8 @@ def sum(a, axis=None, dtype=None, out=None, keepdims=np._NoValue,
     --------
     ndarray.sum : Equivalent method.
 
+    add.reduce : Equivalent functionality of `add`.
+
     cumsum : Cumulative sum of array elements.
 
     trapz : Integration of array values using the composite trapezoidal rule.
@@ -2061,6 +2188,23 @@ def sum(a, axis=None, dtype=None, out=None, keepdims=np._NoValue,
 
     >>> np.sum([])
     0.0
+
+    For floating point numbers the numerical precision of sum (and
+    ``np.add.reduce``) is in general limited by directly adding each number
+    individually to the result causing rounding errors in every step.
+    However, often numpy will use a  numerically better approach (partial
+    pairwise summation) leading to improved precision in many use-cases.
+    This improved precision is always provided when no ``axis`` is given.
+    When ``axis`` is given, it will depend on which axis is summed.
+    Technically, to provide the best speed possible, the improved precision
+    is only used when the summation is along the fast axis in memory.
+    Note that the exact precision may vary depending on other parameters.
+    In contrast to NumPy, Python's ``math.fsum`` function uses a slower but
+    more precise approach to summation.
+    Especially when summing a large number of lower precision floating point
+    numbers, such as ``float32``, numerical errors can become significant.
+    In such cases it can be advisable to use `dtype="float64"` to use a higher
+    precision for the output.
 
     Examples
     --------
@@ -2092,7 +2236,7 @@ def sum(a, axis=None, dtype=None, out=None, keepdims=np._NoValue,
         warnings.warn(
             "Calling np.sum(generator) is deprecated, and in the future will give a different result. "
             "Use np.sum(np.fromiter(generator)) or the python sum builtin instead.",
-            DeprecationWarning, stacklevel=2)
+            DeprecationWarning, stacklevel=3)
 
         res = _sum_(a)
         if out is not None:
@@ -2121,7 +2265,7 @@ def any(a, axis=None, out=None, keepdims=np._NoValue):
         Input array or object that can be converted to an array.
     axis : None or int or tuple of ints, optional
         Axis or axes along which a logical OR reduction is performed.
-        The default (`axis` = `None`) is to perform a logical OR over all
+        The default (``axis=None``) is to perform a logical OR over all
         the dimensions of the input array. `axis` may be negative, in
         which case it counts from the last to the first axis.
 
@@ -2134,7 +2278,7 @@ def any(a, axis=None, out=None, keepdims=np._NoValue):
         the same shape as the expected output and its type is preserved
         (e.g., if it is of type float, then it will remain so, returning
         1.0 for True and 0.0 for False, regardless of the type of `a`).
-        See `doc.ufuncs` (Section "Output arguments") for details.
+        See :ref:`ufuncs-output-type` for more details.
 
     keepdims : bool, optional
         If this is set to True, the axes which are reduced are left
@@ -2207,7 +2351,7 @@ def all(a, axis=None, out=None, keepdims=np._NoValue):
         Input array or object that can be converted to an array.
     axis : None or int or tuple of ints, optional
         Axis or axes along which a logical AND reduction is performed.
-        The default (`axis` = `None`) is to perform a logical AND over all
+        The default (``axis=None``) is to perform a logical AND over all
         the dimensions of the input array. `axis` may be negative, in
         which case it counts from the last to the first axis.
 
@@ -2219,8 +2363,8 @@ def all(a, axis=None, out=None, keepdims=np._NoValue):
         Alternate output array in which to place the result.
         It must have the same shape as the expected output and its
         type is preserved (e.g., if ``dtype(out)`` is float, the result
-        will consist of 0.0's and 1.0's).  See `doc.ufuncs` (Section
-        "Output arguments") for more details.
+        will consist of 0.0's and 1.0's). See :ref:`ufuncs-output-type` for more
+        details.
 
     keepdims : bool, optional
         If this is set to True, the axes which are reduced are left
@@ -2298,8 +2442,8 @@ def cumsum(a, axis=None, dtype=None, out=None):
     out : ndarray, optional
         Alternative output array in which to place the result. It must
         have the same shape and buffer length as the expected output
-        but the type will be cast if necessary. See `doc.ufuncs`
-        (Section "Output arguments") for more details.
+        but the type will be cast if necessary. See :ref:`ufuncs-output-type` for
+        more details.
 
     Returns
     -------
@@ -2356,6 +2500,14 @@ def ptp(a, axis=None, out=None, keepdims=np._NoValue):
 
     The name of the function comes from the acronym for 'peak to peak'.
 
+    .. warning::
+        `ptp` preserves the data type of the array. This means the
+        return value for an input of signed integers with n bits
+        (e.g. `np.int8`, `np.int16`, etc) is also a signed integer
+        with n bits.  In that case, peak-to-peak values greater than
+        ``2**(n-1)-1`` will be returned as negative values. An example
+        with a work-around is shown below.
+
     Parameters
     ----------
     a : array_like
@@ -2393,16 +2545,33 @@ def ptp(a, axis=None, out=None, keepdims=np._NoValue):
 
     Examples
     --------
-    >>> x = np.arange(4).reshape((2,2))
-    >>> x
-    array([[0, 1],
-           [2, 3]])
-
-    >>> np.ptp(x, axis=0)
-    array([2, 2])
+    >>> x = np.array([[4, 9, 2, 10],
+    ...               [6, 9, 7, 12]])
 
     >>> np.ptp(x, axis=1)
-    array([1, 1])
+    array([8, 6])
+
+    >>> np.ptp(x, axis=0)
+    array([2, 0, 5, 2])
+
+    >>> np.ptp(x)
+    10
+
+    This example shows that a negative value can be returned when
+    the input is an array of signed integers.
+
+    >>> y = np.array([[1, 127],
+    ...               [0, 127],
+    ...               [-1, 127],
+    ...               [-2, 127]], dtype=np.int8)
+    >>> np.ptp(y, axis=1)
+    array([ 126,  127, -128, -127], dtype=int8)
+
+    A work-around is to use the `view()` method to view the result as
+    unsigned integers with the same bit width:
+
+    >>> np.ptp(y, axis=1).view(np.uint8)
+    array([126, 127, 128, 129], dtype=uint8)
 
     """
     kwargs = {}
@@ -2444,7 +2613,7 @@ def amax(a, axis=None, out=None, keepdims=np._NoValue, initial=np._NoValue,
     out : ndarray, optional
         Alternative output array in which to place the result.  Must
         be of the same shape and buffer length as the expected output.
-        See `doc.ufuncs` (Section "Output arguments") for more details.
+        See :ref:`ufuncs-output-type` for more details.
 
     keepdims : bool, optional
         If this is set to True, the axes which are reduced are left
@@ -2569,7 +2738,7 @@ def amin(a, axis=None, out=None, keepdims=np._NoValue, initial=np._NoValue,
     out : ndarray, optional
         Alternative output array in which to place the result.  Must
         be of the same shape and buffer length as the expected output.
-        See `doc.ufuncs` (Section "Output arguments") for more details.
+        See :ref:`ufuncs-output-type` for more details.
 
     keepdims : bool, optional
         If this is set to True, the axes which are reduced are left
@@ -2677,6 +2846,9 @@ def alen(a):
     """
     Return the length of the first dimension of the input array.
 
+    .. deprecated:: 1.18
+       `numpy.alen` is deprecated, use `len` instead.
+
     Parameters
     ----------
     a : array_like
@@ -2700,6 +2872,10 @@ def alen(a):
     7
 
     """
+    # NumPy 1.18.0, 2019-08-02
+    warnings.warn(
+        "`np.alen` is deprecated, use `len` instead",
+        DeprecationWarning, stacklevel=2)
     try:
         return len(a)
     except TypeError:
@@ -2772,7 +2948,7 @@ def prod(a, axis=None, dtype=None, out=None, keepdims=np._NoValue,
     See Also
     --------
     ndarray.prod : equivalent method
-    numpy.doc.ufuncs : Section "Output arguments"
+    :ref:`ufuncs-output-type`
 
     Notes
     -----
@@ -2868,7 +3044,7 @@ def cumprod(a, axis=None, dtype=None, out=None):
 
     See Also
     --------
-    numpy.doc.ufuncs : Section "Output arguments"
+    :ref:`ufuncs-output-type`
 
     Notes
     -----
@@ -3014,8 +3190,8 @@ def around(a, decimals=0, out=None):
     out : ndarray, optional
         Alternative output array in which to place the result. It must have
         the same shape as the expected output, but the type of the output
-        values will be cast if necessary. See `doc.ufuncs` (Section
-        "Output arguments") for details.
+        values will be cast if necessary. See :ref:`ufuncs-output-type` for more
+        details.
 
     Returns
     -------
@@ -3038,10 +3214,37 @@ def around(a, decimals=0, out=None):
     -----
     For values exactly halfway between rounded decimal values, NumPy
     rounds to the nearest even value. Thus 1.5 and 2.5 round to 2.0,
-    -0.5 and 0.5 round to 0.0, etc. Results may also be surprising due
-    to the inexact representation of decimal fractions in the IEEE
-    floating point standard [1]_ and errors introduced when scaling
-    by powers of ten.
+    -0.5 and 0.5 round to 0.0, etc.
+
+    ``np.around`` uses a fast but sometimes inexact algorithm to round
+    floating-point datatypes. For positive `decimals` it is equivalent to
+    ``np.true_divide(np.rint(a * 10**decimals), 10**decimals)``, which has
+    error due to the inexact representation of decimal fractions in the IEEE
+    floating point standard [1]_ and errors introduced when scaling by powers
+    of ten. For instance, note the extra "1" in the following:
+
+        >>> np.round(56294995342131.5, 3)
+        56294995342131.51
+
+    If your goal is to print such values with a fixed number of decimals, it is
+    preferable to use numpy's float printing routines to limit the number of
+    printed decimals:
+
+        >>> np.format_float_positional(56294995342131.5, precision=3)
+        '56294995342131.5'
+
+    The float printing routines use an accurate but much more computationally
+    demanding algorithm to compute the number of digits after the decimal
+    point.
+
+    Alternatively, Python's builtin `round` function uses a more accurate
+    but slower algorithm for 64-bit floating point values:
+
+        >>> round(56294995342131.5, 3)
+        56294995342131.5
+        >>> np.round(16.055, 2), round(16.055, 2)  # equals 16.0549999999999997
+        (16.06, 16.05)
+
 
     References
     ----------
@@ -3102,7 +3305,7 @@ def mean(a, axis=None, dtype=None, out=None, keepdims=np._NoValue):
         Alternate output array in which to place the result.  The default
         is ``None``; if provided, it must have the same shape as the
         expected output, but the type will be cast if necessary.
-        See `doc.ufuncs` for details.
+        See :ref:`ufuncs-output-type` for more details.
 
     keepdims : bool, optional
         If this is set to True, the axes which are reduced are left
@@ -3237,22 +3440,23 @@ def std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue):
     See Also
     --------
     var, mean, nanmean, nanstd, nanvar
-    numpy.doc.ufuncs : Section "Output arguments"
+    :ref:`ufuncs-output-type`
 
     Notes
     -----
     The standard deviation is the square root of the average of the squared
-    deviations from the mean, i.e., ``std = sqrt(mean(abs(x - x.mean())**2))``.
+    deviations from the mean, i.e., ``std = sqrt(mean(x))``, where
+    ``x = abs(a - a.mean())**2``.
 
-    The average squared deviation is normally calculated as
-    ``x.sum() / N``, where ``N = len(x)``.  If, however, `ddof` is specified,
-    the divisor ``N - ddof`` is used instead. In standard statistical
-    practice, ``ddof=1`` provides an unbiased estimator of the variance
-    of the infinite population. ``ddof=0`` provides a maximum likelihood
-    estimate of the variance for normally distributed variables. The
-    standard deviation computed in this function is the square root of
-    the estimated variance, so even with ``ddof=1``, it will not be an
-    unbiased estimate of the standard deviation per se.
+    The average squared deviation is typically calculated as ``x.sum() / N``,
+    where ``N = len(x)``. If, however, `ddof` is specified, the divisor
+    ``N - ddof`` is used instead. In standard statistical practice, ``ddof=1``
+    provides an unbiased estimator of the variance of the infinite population.
+    ``ddof=0`` provides a maximum likelihood estimate of the variance for
+    normally distributed variables. The standard deviation computed in this
+    function is the square root of the estimated variance, so even with
+    ``ddof=1``, it will not be an unbiased estimate of the standard deviation
+    per se.
 
     Note that, for complex numbers, `std` takes the absolute
     value before squaring, so that the result is always real and nonnegative.
@@ -3332,7 +3536,7 @@ def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue):
         instead of a single axis or all the axes as before.
     dtype : data-type, optional
         Type to use in computing the variance.  For arrays of integer type
-        the default is `float32`; for arrays of float types it is the same as
+        the default is `float64`; for arrays of float types it is the same as
         the array type.
     out : ndarray, optional
         Alternate output array in which to place the result.  It must have
@@ -3361,15 +3565,15 @@ def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue):
 
     See Also
     --------
-    std , mean, nanmean, nanstd, nanvar
-    numpy.doc.ufuncs : Section "Output arguments"
+    std, mean, nanmean, nanstd, nanvar
+    :ref:`ufuncs-output-type`
 
     Notes
     -----
     The variance is the average of the squared deviations from the mean,
-    i.e.,  ``var = mean(abs(x - x.mean())**2)``.
+    i.e.,  ``var = mean(x)``, where ``x = abs(a - a.mean())**2``.
 
-    The mean is normally calculated as ``x.sum() / N``, where ``N = len(x)``.
+    The mean is typically calculated as ``x.sum() / N``, where ``N = len(x)``.
     If, however, `ddof` is specified, the divisor ``N - ddof`` is used
     instead.  In standard statistical practice, ``ddof=1`` provides an
     unbiased estimator of the variance of a hypothetical infinite population.
@@ -3491,30 +3695,3 @@ def alltrue(*args, **kwargs):
     numpy.all : Equivalent function; see for details.
     """
     return all(*args, **kwargs)
-
-
-@array_function_dispatch(_ndim_dispatcher)
-def rank(a):
-    """
-    Return the number of dimensions of an array.
-
-    .. note::
-        This function is deprecated in NumPy 1.9 to avoid confusion with
-        `numpy.linalg.matrix_rank`. The ``ndim`` attribute or function
-        should be used instead.
-
-    See Also
-    --------
-    ndim : equivalent non-deprecated function
-
-    Notes
-    -----
-    In the old Numeric package, `rank` was the term used for the number of
-    dimensions, but in NumPy `ndim` is used instead.
-    """
-    # 2014-04-12, 1.9
-    warnings.warn(
-        "`rank` is deprecated; use the `ndim` attribute or function instead. "
-        "To find the rank of a matrix see `numpy.linalg.matrix_rank`.",
-        VisibleDeprecationWarning, stacklevel=2)
-    return ndim(a)

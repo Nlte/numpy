@@ -1,17 +1,16 @@
-from __future__ import division, absolute_import, print_function
-
 __all__ = ['atleast_1d', 'atleast_2d', 'atleast_3d', 'block', 'hstack',
            'stack', 'vstack']
 
 import functools
+import itertools
 import operator
-import types
 import warnings
 
 from . import numeric as _nx
 from . import overrides
-from .numeric import array, asanyarray, newaxis
+from ._asarray import array, asanyarray
 from .multiarray import normalize_axis_index
+from . import fromnumeric as _from_nx
 
 
 array_function_dispatch = functools.partial(
@@ -124,7 +123,7 @@ def atleast_2d(*arys):
         if ary.ndim == 0:
             result = ary.reshape(1, 1)
         elif ary.ndim == 1:
-            result = ary[newaxis,:]
+            result = ary[_nx.newaxis, :]
         else:
             result = ary
         res.append(result)
@@ -194,9 +193,9 @@ def atleast_3d(*arys):
         if ary.ndim == 0:
             result = ary.reshape(1, 1, 1)
         elif ary.ndim == 1:
-            result = ary[newaxis,:, newaxis]
+            result = ary[_nx.newaxis, :, _nx.newaxis]
         elif ary.ndim == 2:
-            result = ary[:,:, newaxis]
+            result = ary[:, :, _nx.newaxis]
         else:
             result = ary
         res.append(result)
@@ -248,12 +247,13 @@ def vstack(tup):
 
     See Also
     --------
-    stack : Join a sequence of arrays along a new axis.
-    hstack : Stack arrays in sequence horizontally (column wise).
-    dstack : Stack arrays in sequence depth wise (along third dimension).
     concatenate : Join a sequence of arrays along an existing axis.
-    vsplit : Split array into a list of multiple sub-arrays vertically.
-    block : Assemble arrays from blocks.
+    stack : Join a sequence of arrays along a new axis.
+    block : Assemble an nd-array from nested lists of blocks.
+    hstack : Stack arrays in sequence horizontally (column wise).
+    dstack : Stack arrays in sequence depth wise (along third axis).
+    column_stack : Stack 1-D arrays as columns into a 2-D array.
+    vsplit : Split an array into multiple sub-arrays vertically (row-wise).
 
     Examples
     --------
@@ -274,7 +274,13 @@ def vstack(tup):
            [4]])
 
     """
-    return _nx.concatenate([atleast_2d(_m) for _m in tup], 0)
+    if not overrides.ARRAY_FUNCTION_ENABLED:
+        # raise warning if necessary
+        _arrays_for_stack_dispatcher(tup, stacklevel=2)
+    arrs = atleast_2d(*tup)
+    if not isinstance(arrs, list):
+        arrs = [arrs]
+    return _nx.concatenate(arrs, 0)
 
 
 @array_function_dispatch(_vhstack_dispatcher)
@@ -304,12 +310,13 @@ def hstack(tup):
 
     See Also
     --------
+    concatenate : Join a sequence of arrays along an existing axis.
     stack : Join a sequence of arrays along a new axis.
+    block : Assemble an nd-array from nested lists of blocks.
     vstack : Stack arrays in sequence vertically (row wise).
     dstack : Stack arrays in sequence depth wise (along third axis).
-    concatenate : Join a sequence of arrays along an existing axis.
-    hsplit : Split array along second axis.
-    block : Assemble arrays from blocks.
+    column_stack : Stack 1-D arrays as columns into a 2-D array.
+    hsplit : Split an array into multiple sub-arrays horizontally (column-wise).
 
     Examples
     --------
@@ -325,7 +332,13 @@ def hstack(tup):
            [3, 4]])
 
     """
-    arrs = [atleast_1d(_m) for _m in tup]
+    if not overrides.ARRAY_FUNCTION_ENABLED:
+        # raise warning if necessary
+        _arrays_for_stack_dispatcher(tup, stacklevel=2)
+
+    arrs = atleast_1d(*tup)
+    if not isinstance(arrs, list):
+        arrs = [arrs]
     # As a special case, dimension 0 of 1-dimensional arrays is "horizontal"
     if arrs and arrs[0].ndim == 1:
         return _nx.concatenate(arrs, 0)
@@ -347,9 +360,9 @@ def stack(arrays, axis=0, out=None):
     """
     Join a sequence of arrays along a new axis.
 
-    The `axis` parameter specifies the index of the new axis in the dimensions
-    of the result. For example, if ``axis=0`` it will be the first dimension
-    and if ``axis=-1`` it will be the last dimension.
+    The ``axis`` parameter specifies the index of the new axis in the
+    dimensions of the result. For example, if ``axis=0`` it will be the first
+    dimension and if ``axis=-1`` it will be the last dimension.
 
     .. versionadded:: 1.10.0
 
@@ -357,8 +370,10 @@ def stack(arrays, axis=0, out=None):
     ----------
     arrays : sequence of array_like
         Each array must have the same shape.
+
     axis : int, optional
         The axis in the result array along which the input arrays are stacked.
+
     out : ndarray, optional
         If provided, the destination to place the result. The shape must be
         correct, matching that of what stack would have returned if no
@@ -372,8 +387,8 @@ def stack(arrays, axis=0, out=None):
     See Also
     --------
     concatenate : Join a sequence of arrays along an existing axis.
+    block : Assemble an nd-array from nested lists of blocks.
     split : Split array into a list of multiple sub-arrays of equal size.
-    block : Assemble arrays from blocks.
 
     Examples
     --------
@@ -399,6 +414,10 @@ def stack(arrays, axis=0, out=None):
            [3, 4]])
 
     """
+    if not overrides.ARRAY_FUNCTION_ENABLED:
+        # raise warning if necessary
+        _arrays_for_stack_dispatcher(arrays, stacklevel=2)
+
     arrays = [asanyarray(arr) for arr in arrays]
     if not arrays:
         raise ValueError('need at least one array to stack')
@@ -413,6 +432,14 @@ def stack(arrays, axis=0, out=None):
     sl = (slice(None),) * axis + (_nx.newaxis,)
     expanded_arrays = [arr[sl] for arr in arrays]
     return _nx.concatenate(expanded_arrays, axis=axis, out=out)
+
+
+# Internal functions to eliminate the overhead of repeated dispatch in one of
+# the two possible paths inside np.block.
+# Use getattr to protect against __array_function__ being disabled.
+_size = getattr(_from_nx.size, '__wrapped__', _from_nx.size)
+_ndim = getattr(_from_nx.ndim, '__wrapped__', _from_nx.ndim)
+_concatenate = getattr(_from_nx.concatenate, '__wrapped__', _from_nx.concatenate)
 
 
 def _block_format_index(index):
@@ -446,7 +473,7 @@ def _block_check_depths_match(arrays, parent_index=[]):
     first_index : list of int
         The full index of an element from the bottom of the nesting in
         `arrays`. If any element at the bottom is an empty list, this will
-        refer to it, and the last index along the empty axis will be `None`.
+        refer to it, and the last index along the empty axis will be None.
     max_arr_ndim : int
         The maximum of the ndims of the arrays nested in `arrays`.
     final_size: int
@@ -495,8 +522,8 @@ def _block_check_depths_match(arrays, parent_index=[]):
         return parent_index + [None], 0, 0
     else:
         # We've 'bottomed out' - arrays is either a scalar or an array
-        size = _nx.size(arrays)
-        return parent_index, _nx.ndim(arrays), size
+        size = _size(arrays)
+        return parent_index, _ndim(arrays), size
 
 
 def _atleast_nd(a, ndim):
@@ -506,20 +533,14 @@ def _atleast_nd(a, ndim):
 
 
 def _accumulate(values):
-    # Helper function because Python 2.7 doesn't have
-    # itertools.accumulate
-    value = 0
-    accumulated = []
-    for v in values:
-        value += v
-        accumulated.append(value)
-    return accumulated
+    return list(itertools.accumulate(values))
 
 
 def _concatenate_shapes(shapes, axis):
     """Given array shapes, return the resulting shape and slices prefixes.
 
-    These help in nested concatation.
+    These help in nested concatenation.
+    
     Returns
     -------
     shape: tuple of int
@@ -543,13 +564,13 @@ def _concatenate_shapes(shapes, axis):
         ret[(slice(None),) * axis + sl_c] == c
         ```
 
-        Thses are called slice prefixes since they are used in the recursive
+        These are called slice prefixes since they are used in the recursive
         blocking algorithm to compute the left-most slices during the
         recursion. Therefore, they must be prepended to rest of the slice
-        that was computed deeper in the recusion.
+        that was computed deeper in the recursion.
 
         These are returned as tuples to ensure that they can quickly be added
-        to existing slice tuple without creating a new tuple everytime.
+        to existing slice tuple without creating a new tuple every time.
 
     """
     # Cache a result that will be reused.
@@ -639,7 +660,7 @@ def _block(arrays, max_depth, result_ndim, depth=0):
     if depth < max_depth:
         arrs = [_block(arr, max_depth, result_ndim, depth+1)
                 for arr in arrays]
-        return _nx.concatenate(arrs, axis=-(max_depth-depth))
+        return _concatenate(arrs, axis=-(max_depth-depth))
     else:
         # We've 'bottomed out' - arrays is either a scalar or an array
         # type(arrays) is not list
@@ -652,8 +673,7 @@ def _block_dispatcher(arrays):
     # tuple. Also, we know that list.__array_function__ will never exist.
     if type(arrays) is list:
         for subarrays in arrays:
-            for subarray in _block_dispatcher(subarrays):
-                yield subarray
+            yield from _block_dispatcher(subarrays)
     else:
         yield arrays
 
@@ -706,12 +726,13 @@ def block(arrays):
 
     See Also
     --------
-    concatenate : Join a sequence of arrays together.
-    stack : Stack arrays in sequence along a new dimension.
-    hstack : Stack arrays in sequence horizontally (column wise).
+    concatenate : Join a sequence of arrays along an existing axis.
+    stack : Join a sequence of arrays along a new axis.
     vstack : Stack arrays in sequence vertically (row wise).
-    dstack : Stack arrays in sequence depth wise (along third dimension).
-    vsplit : Split array into a list of multiple sub-arrays vertically.
+    hstack : Stack arrays in sequence horizontally (column wise).
+    dstack : Stack arrays in sequence depth wise (along third axis).
+    column_stack : Stack 1-D arrays as columns into a 2-D array.
+    vsplit : Split an array into multiple sub-arrays vertically (row-wise).
 
     Notes
     -----
@@ -829,9 +850,9 @@ def block(arrays):
         return _block_concatenate(arrays, list_ndim, result_ndim)
 
 
-# Theses helper functions are mostly used for testing.
+# These helper functions are mostly used for testing.
 # They allow us to write tests that directly call `_block_slicing`
-# or `_block_concatenate` wtihout blocking large arrays to forse the wisdom
+# or `_block_concatenate` without blocking large arrays to force the wisdom
 # to trigger the desired path.
 def _block_setup(arrays):
     """
@@ -857,7 +878,7 @@ def _block_slicing(arrays, list_ndim, result_ndim):
 
     # Test preferring F only in the case that all input arrays are F
     F_order = all(arr.flags['F_CONTIGUOUS'] for arr in arrays)
-    C_order =  all(arr.flags['C_CONTIGUOUS'] for arr in arrays)
+    C_order = all(arr.flags['C_CONTIGUOUS'] for arr in arrays)
     order = 'F' if F_order and not C_order else 'C'
     result = _nx.empty(shape=shape, dtype=dtype, order=order)
     # Note: In a c implementation, the function

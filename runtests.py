@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
 runtests.py [OPTIONS] [-- ARGS]
 
@@ -18,6 +18,10 @@ Run a debugger:
 
     $ gdb --args python runtests.py [...other args...]
 
+Disable pytest capturing of output by using its '-s' option:
+
+    $ python runtests.py -- -s
+
 Generate C code coverage listing under build/lcov/:
 (requires http://ltp.sourceforge.net/coverage/lcov.php)
 
@@ -25,8 +29,6 @@ Generate C code coverage listing under build/lcov/:
     $ python runtests.py --lcov-html
 
 """
-from __future__ import division, print_function
-
 #
 # This is a generic test runner script for projects using NumPy's test
 # framework. Change the following values to adapt to your project:
@@ -67,6 +69,10 @@ def main(argv):
     parser = ArgumentParser(usage=__doc__.lstrip())
     parser.add_argument("--verbose", "-v", action="count", default=1,
                         help="more verbosity")
+    parser.add_argument("--debug-info", action="store_true",
+                        help=("add --verbose-cfg to build_src to show compiler "
+                              "configuration output while creating "
+                              "_numpyconfig.h and config.h"))
     parser.add_argument("--no-build", "-n", action="store_true", default=False,
                         help="do not build the project (use system installed version)")
     parser.add_argument("--build-only", "-b", action="store_true", default=False,
@@ -74,7 +80,7 @@ def main(argv):
     parser.add_argument("--doctests", action="store_true", default=False,
                         help="Run doctests in module")
     parser.add_argument("--refguide-check", action="store_true", default=False,
-                        help="Run refguide check (do not run regular tests.)")
+                        help="Run refguide (doctest) check (do not run regular tests.)")
     parser.add_argument("--coverage", action="store_true", default=False,
                         help=("report coverage of project code. HTML output goes "
                               "under build/coverage"))
@@ -102,10 +108,20 @@ def main(argv):
                         help="Start IPython shell with PYTHONPATH set")
     parser.add_argument("--shell", action="store_true",
                         help="Start Unix shell with PYTHONPATH set")
+    parser.add_argument("--mypy", action="store_true",
+                        help="Run mypy on files with NumPy on the MYPYPATH")
     parser.add_argument("--debug", "-g", action="store_true",
                         help="Debug build")
     parser.add_argument("--parallel", "-j", type=int, default=0,
                         help="Number of parallel jobs during build")
+    parser.add_argument("--warn-error", action="store_true",
+                        help="Set -Werror to convert all compiler warnings to errors")
+    parser.add_argument("--cpu-baseline", default=None,
+                        help="Specify a list of enabled baseline CPU optimizations"),
+    parser.add_argument("--cpu-dispatch", default=None,
+                        help="Specify a list of dispatched CPU optimizations"),
+    parser.add_argument("--disable-optimization", action="store_true",
+                        help="Disable CPU optimized code(dispatch,simd,fast...)"),
     parser.add_argument("--show-build-log", action="store_true",
                         help="Show build output rather than using a log file")
     parser.add_argument("--bench", action="store_true",
@@ -117,7 +133,7 @@ def main(argv):
                               "COMMIT. Note that you need to commit your "
                               "changes first!"))
     parser.add_argument("args", metavar="ARGS", default=[], nargs=REMAINDER,
-                        help="Arguments to pass to Nose, Python or shell")
+                        help="Arguments to pass to pytest, asv, mypy, Python or shell")
     args = parser.parse_args(argv)
 
     if args.durations < 0:
@@ -154,8 +170,10 @@ def main(argv):
         site_dir = os.path.sep.join(_temp.__file__.split(os.path.sep)[:-2])
 
     extra_argv = args.args[:]
-    if extra_argv and extra_argv[0] == '--':
-        extra_argv = extra_argv[1:]
+    if not args.bench:
+        # extra_argv may also lists selected benchmarks
+        if extra_argv and extra_argv[0] == '--':
+            extra_argv = extra_argv[1:]
 
     if args.python:
         # Debugging issues with warnings is much easier if you can see them
@@ -173,7 +191,7 @@ def main(argv):
             sys.modules['__main__'] = types.ModuleType('__main__')
             ns = dict(__name__='__main__',
                       __file__=extra_argv[0])
-            exec_(script, ns)
+            exec(script, ns)
             sys.exit(0)
         else:
             import code
@@ -186,7 +204,7 @@ def main(argv):
         import warnings; warnings.filterwarnings("always")
         import IPython
         import numpy as np
-        IPython.embed(user_ns={"np": np})
+        IPython.embed(colors='neutral', user_ns={"np": np})
         sys.exit(0)
 
     if args.shell:
@@ -194,6 +212,36 @@ def main(argv):
         print("Spawning a shell ({})...".format(shell))
         subprocess.call([shell] + extra_argv)
         sys.exit(0)
+
+    if args.mypy:
+        try:
+            import mypy.api
+        except ImportError:
+            raise RuntimeError(
+                "Mypy not found. Please install it by running "
+                "pip install -r test_requirements.txt from the repo root"
+            )
+
+        os.environ['MYPYPATH'] = site_dir
+        # By default mypy won't color the output since it isn't being
+        # invoked from a tty.
+        os.environ['MYPY_FORCE_COLOR'] = '1'
+
+        config = os.path.join(
+            site_dir,
+            "numpy",
+            "typing",
+            "tests",
+            "data",
+            "mypy.ini",
+        )
+
+        report, errors, status = mypy.api.run(
+            ['--config-file', config] + args.args
+        )
+        print(report, end='')
+        print(errors, end='', file=sys.stderr)
+        sys.exit(status)
 
     if args.coverage:
         dst_dir = os.path.join(ROOT_DIR, 'build', 'coverage')
@@ -212,13 +260,21 @@ def main(argv):
 
     if args.bench:
         # Run ASV
-        items = extra_argv
+        for i, v in enumerate(extra_argv):
+            if v.startswith("--"):
+                items = extra_argv[:i]
+                if v == "--":
+                    i += 1  # skip '--' indicating further are passed on.
+                bench_args = extra_argv[i:]
+                break
+        else:
+            items = extra_argv
+            bench_args = []
+
         if args.tests:
             items += args.tests
         if args.submodule:
             items += [args.submodule]
-
-        bench_args = []
         for a in items:
             bench_args.extend(['--bench', a])
 
@@ -258,8 +314,6 @@ def main(argv):
                    commit_a, commit_b] + bench_args
             ret = subprocess.call(cmd, cwd=os.path.join(ROOT_DIR, 'benchmarks'))
             sys.exit(ret)
-
-    test_dir = os.path.join(ROOT_DIR, 'build', 'test')
 
     if args.build_only:
         sys.exit(0)
@@ -319,7 +373,7 @@ def build_project(args):
 
     """
 
-    import distutils.sysconfig
+    import sysconfig
 
     root_ok = [os.path.exists(os.path.join(ROOT_DIR, fn))
                for fn in PROJECT_ROOT_FILES]
@@ -335,7 +389,7 @@ def build_project(args):
 
     # Always use ccache, if installed
     env['PATH'] = os.pathsep.join(EXTRA_PATH + env.get('PATH', '').split(os.pathsep))
-    cvars = distutils.sysconfig.get_config_vars()
+    cvars = sysconfig.get_config_vars()
     compiler = env.get('CC') or cvars.get('CC', '')
     if 'gcc' in compiler:
         # Check that this isn't clang masquerading as gcc.
@@ -368,6 +422,16 @@ def build_project(args):
     cmd += ["build"]
     if args.parallel > 1:
         cmd += ["-j", str(args.parallel)]
+    if args.debug_info:
+        cmd += ["build_src", "--verbose-cfg"]
+    if args.warn_error:
+        cmd += ["--warn-error"]
+    if args.cpu_baseline:
+        cmd += ["--cpu-baseline", args.cpu_baseline]
+    if args.cpu_dispatch:
+        cmd += ["--cpu-dispatch", args.cpu_dispatch]
+    if args.disable_optimization:
+        cmd += ["--disable-optimization"]
     # Install; avoid producing eggs so numpy can be imported from dst_dir.
     cmd += ['install', '--prefix=' + dst_dir,
             '--single-version-externally-managed',
@@ -382,7 +446,7 @@ def build_project(args):
         os.makedirs(site_dir)
     if not os.path.exists(site_dir_noarch):
         os.makedirs(site_dir_noarch)
-    env['PYTHONPATH'] = site_dir + ':' + site_dir_noarch
+    env['PYTHONPATH'] = site_dir + os.pathsep + site_dir_noarch
 
     log_filename = os.path.join(ROOT_DIR, 'build.log')
 
@@ -468,26 +532,6 @@ def lcov_generate():
     else:
         print("HTML output generated under build/lcov/")
 
-
-#
-# Python 3 support
-#
-
-if sys.version_info[0] >= 3:
-    import builtins
-    exec_ = getattr(builtins, "exec")
-else:
-    def exec_(code, globs=None, locs=None):
-        """Execute code in a namespace."""
-        if globs is None:
-            frame = sys._getframe(1)
-            globs = frame.f_globals
-            if locs is None:
-                locs = frame.f_locals
-            del frame
-        elif locs is None:
-            locs = globs
-        exec("""exec code in globs, locs""")
 
 if __name__ == "__main__":
     main(argv=sys.argv[1:])

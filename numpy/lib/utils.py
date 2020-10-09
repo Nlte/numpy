@@ -1,7 +1,6 @@
-from __future__ import division, absolute_import, print_function
-
 import os
 import sys
+import textwrap
 import types
 import re
 import warnings
@@ -10,9 +9,6 @@ from numpy.core.numerictypes import issubclass_, issubsctype, issubdtype
 from numpy.core.overrides import set_module
 from numpy.core import ndarray, ufunc, asarray
 import numpy as np
-
-# getargspec and formatargspec were removed in Python 3.6
-from numpy.compat import getargspec, formatargspec
 
 __all__ = [
     'issubclass_', 'issubsctype', 'issubdtype', 'deprecate',
@@ -55,7 +51,7 @@ def _set_function_name(func, name):
     return func
 
 
-class _Deprecate(object):
+class _Deprecate:
     """
     Decorator class to deprecate old functions.
 
@@ -105,6 +101,21 @@ class _Deprecate(object):
         if doc is None:
             doc = depdoc
         else:
+            lines = doc.expandtabs().split('\n')
+            indent = _get_indent(lines[1:])
+            if lines[0].lstrip():
+                # Indent the original first line to let inspect.cleandoc()
+                # dedent the docstring despite the deprecation notice.
+                doc = indent * ' ' + doc
+            else:
+                # Remove the same leading blank lines as cleandoc() would.
+                skip = len(lines[0]) + 1
+                for line in lines[1:]:
+                    if len(line) > indent:
+                        break
+                    skip += len(line) + 1
+                doc = doc[skip:]
+            depdoc = textwrap.indent(depdoc, ' ' * indent)
             doc = '\n\n'.join([depdoc, doc])
         newfunc.__doc__ = doc
         try:
@@ -114,6 +125,21 @@ class _Deprecate(object):
         else:
             newfunc.__dict__.update(d)
         return newfunc
+
+
+def _get_indent(lines):
+    """
+    Determines the leading whitespace that could be removed from all the lines.
+    """
+    indent = sys.maxsize
+    for line in lines:
+        content = len(line.lstrip())
+        if content:
+            indent = min(indent, len(line) - content)
+    if indent == sys.maxsize:
+        indent = 0
+    return indent
+
 
 def deprecate(*args, **kwargs):
     """
@@ -525,9 +551,12 @@ def info(object=None, maxwidth=76, output=sys.stdout, toplevel='numpy'):
                   file=output
                   )
 
-    elif inspect.isfunction(object):
+    elif inspect.isfunction(object) or inspect.ismethod(object):
         name = object.__name__
-        arguments = formatargspec(*getargspec(object))
+        try:
+            arguments = str(inspect.signature(object))
+        except Exception:
+            arguments = "()"
 
         if len(name+arguments) > maxwidth:
             argstr = _split_line(name, arguments, maxwidth)
@@ -539,18 +568,10 @@ def info(object=None, maxwidth=76, output=sys.stdout, toplevel='numpy'):
 
     elif inspect.isclass(object):
         name = object.__name__
-        arguments = "()"
         try:
-            if hasattr(object, '__init__'):
-                arguments = formatargspec(
-                        *getargspec(object.__init__.__func__)
-                        )
-                arglist = arguments.split(', ')
-                if len(arglist) > 1:
-                    arglist[1] = "("+arglist[1]
-                    arguments = ", ".join(arglist[1:])
+            arguments = str(inspect.signature(object))
         except Exception:
-            pass
+            arguments = "()"
 
         if len(name+arguments) > maxwidth:
             argstr = _split_line(name, arguments, maxwidth)
@@ -577,61 +598,6 @@ def info(object=None, maxwidth=76, output=sys.stdout, toplevel='numpy'):
                             inspect.getdoc(thisobj) or "None"
                             )
                 print("  %s  --  %s" % (meth, methstr), file=output)
-
-    elif (sys.version_info[0] < 3
-            and isinstance(object, types.InstanceType)):
-        # check for __call__ method
-        # types.InstanceType is the type of the instances of oldstyle classes
-        print("Instance of class: ", object.__class__.__name__, file=output)
-        print(file=output)
-        if hasattr(object, '__call__'):
-            arguments = formatargspec(
-                    *getargspec(object.__call__.__func__)
-                    )
-            arglist = arguments.split(', ')
-            if len(arglist) > 1:
-                arglist[1] = "("+arglist[1]
-                arguments = ", ".join(arglist[1:])
-            else:
-                arguments = "()"
-
-            if hasattr(object, 'name'):
-                name = "%s" % object.name
-            else:
-                name = "<name>"
-            if len(name+arguments) > maxwidth:
-                argstr = _split_line(name, arguments, maxwidth)
-            else:
-                argstr = name + arguments
-
-            print(" " + argstr + "\n", file=output)
-            doc = inspect.getdoc(object.__call__)
-            if doc is not None:
-                print(inspect.getdoc(object.__call__), file=output)
-            print(inspect.getdoc(object), file=output)
-
-        else:
-            print(inspect.getdoc(object), file=output)
-
-    elif inspect.ismethod(object):
-        name = object.__name__
-        arguments = formatargspec(
-                *getargspec(object.__func__)
-                )
-        arglist = arguments.split(', ')
-        if len(arglist) > 1:
-            arglist[1] = "("+arglist[1]
-            arguments = ", ".join(arglist[1:])
-        else:
-            arguments = "()"
-
-        if len(name+arguments) > maxwidth:
-            argstr = _split_line(name, arguments, maxwidth)
-        else:
-            argstr = name + arguments
-
-        print(" " + argstr + "\n", file=output)
-        print(inspect.getdoc(object), file=output)
 
     elif hasattr(object, '__doc__'):
         print(inspect.getdoc(object), file=output)
@@ -759,13 +725,8 @@ def lookfor(what, module=None, import_modules=True, regenerate=False,
         if kind in ('module', 'object'):
             # don't show modules or objects
             continue
-        ok = True
         doc = docstring.lower()
-        for w in whats:
-            if w not in doc:
-                ok = False
-                break
-        if ok:
+        if all(w in doc for w in whats):
             found.append(name)
 
     # Relevance sort
@@ -845,15 +806,10 @@ def _lookfor_generate_cache(module, import_modules, regenerate):
         or newly generated.
 
     """
-    global _lookfor_caches
     # Local import to speed up numpy's import time.
     import inspect
 
-    if sys.version_info[0] >= 3:
-        # In Python3 stderr, stdout are text files.
-        from io import StringIO
-    else:
-        from StringIO import StringIO
+    from io import StringIO
 
     if module is None:
         module = "numpy"
@@ -974,93 +930,6 @@ def _getmembers(item):
                    if hasattr(item, x)]
     return members
 
-#-----------------------------------------------------------------------------
-
-# The following SafeEval class and company are adapted from Michael Spencer's
-# ASPN Python Cookbook recipe: https://code.activestate.com/recipes/364469/
-#
-# Accordingly it is mostly Copyright 2006 by Michael Spencer.
-# The recipe, like most of the other ASPN Python Cookbook recipes was made
-# available under the Python license.
-#   https://en.wikipedia.org/wiki/Python_License
-
-# It has been modified to:
-#   * handle unary -/+
-#   * support True/False/None
-#   * raise SyntaxError instead of a custom exception.
-
-class SafeEval(object):
-    """
-    Object to evaluate constant string expressions.
-
-    This includes strings with lists, dicts and tuples using the abstract
-    syntax tree created by ``compiler.parse``.
-
-    .. deprecated:: 1.10.0
-
-    See Also
-    --------
-    safe_eval
-
-    """
-    def __init__(self):
-        # 2014-10-15, 1.10
-        warnings.warn("SafeEval is deprecated in 1.10 and will be removed.",
-                      DeprecationWarning, stacklevel=2)
-
-    def visit(self, node):
-        cls = node.__class__
-        meth = getattr(self, 'visit' + cls.__name__, self.default)
-        return meth(node)
-
-    def default(self, node):
-        raise SyntaxError("Unsupported source construct: %s"
-                          % node.__class__)
-
-    def visitExpression(self, node):
-        return self.visit(node.body)
-
-    def visitNum(self, node):
-        return node.n
-
-    def visitStr(self, node):
-        return node.s
-
-    def visitBytes(self, node):
-        return node.s
-
-    def visitDict(self, node,**kw):
-        return dict([(self.visit(k), self.visit(v))
-                     for k, v in zip(node.keys, node.values)])
-
-    def visitTuple(self, node):
-        return tuple([self.visit(i) for i in node.elts])
-
-    def visitList(self, node):
-        return [self.visit(i) for i in node.elts]
-
-    def visitUnaryOp(self, node):
-        import ast
-        if isinstance(node.op, ast.UAdd):
-            return +self.visit(node.operand)
-        elif isinstance(node.op, ast.USub):
-            return -self.visit(node.operand)
-        else:
-            raise SyntaxError("Unknown unary op: %r" % node.op)
-
-    def visitName(self, node):
-        if node.id == 'False':
-            return False
-        elif node.id == 'True':
-            return True
-        elif node.id == 'None':
-            return None
-        else:
-            raise SyntaxError("Unknown name: %s" % node.id)
-
-    def visitNameConstant(self, node):
-        return node.value
-
 
 def safe_eval(source):
     """
@@ -1107,7 +976,6 @@ def safe_eval(source):
     """
     # Local import to speed up numpy's import time.
     import ast
-
     return ast.literal_eval(source)
 
 

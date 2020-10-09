@@ -1,3 +1,5 @@
+.. _NEP24:
+
 =============================================================
 NEP 24 — Missing Data Functionality - Alternative 1 to NEP 12
 =============================================================
@@ -28,7 +30,7 @@ Detailed description
 Rationale
 ^^^^^^^^^
 
-The purpose of this aNEP is to define two interfaces -- one for handling
+The purpose of this NEP is to define two interfaces -- one for handling
 'missing values', and one for handling 'masked arrays'.
 
 An ordinary value is something like an integer or a floating point number. A

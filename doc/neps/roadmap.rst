@@ -6,110 +6,124 @@ This is a live snapshot of tasks and features we will be investing resources
 in. It may be used to encourage and inspire developers and to search for
 funding.
 
-Interoperability protocols & duck typing
-----------------------------------------
 
-- `__array_function__`
+Interoperability
+----------------
 
-  See `NEP 18`_ and a sample implementation_
+We aim to make it easier to interoperate with NumPy. There are many NumPy-like
+packages that add interesting new capabilities to the Python ecosystem, as well
+as many libraries that extend NumPy's model in various ways.  Work in NumPy to
+facilitate interoperability with all such packages, and the code that uses them,
+may include (among other things) interoperability protocols, better duck typing
+support and ndarray subclass handling.
 
-- Array Duck-Typing
+The ``__array_ufunc__`` and ``__array_function__`` protocols are stable, but
+do not cover the whole API.  New protocols for overriding other functionality
+in NumPy are needed. Work in this area aims to bring to completion one or more
+of the following proposals:
 
-  `NEP 22`_    `np.asduckarray()`
+- :ref:`NEP30`
+- :ref:`NEP31`
+- :ref:`NEP35`
+- :ref:`NEP37`
 
-- Mixins like `NDArrayOperatorsMixin`:
+In addition we aim to provide ways to make it easier for other libraries to
+implement a NumPy-compatible API. This may include defining consistent subsets
+of the API, as discussed in `this section of NEP 37
+<https://numpy.org/neps/nep-0037-array-module.html#requesting-restricted-subsets-of-numpy-s-api>`__.
 
-  - for mutable arrays
-  - for reduction methods implemented as ufuncs
 
-Better dtypes
+Extensibility
 -------------
 
-- Easier custom dtypes
+We aim to make it much easier to extend NumPy. The primary topic here is to
+improve the dtype system.
+
+- Easier custom dtypes:
+
   - Simplify and/or wrap the current C-API
   - More consistent support for dtype metadata
   - Support for writing a dtype in Python
+
 - New string dtype(s):
+
   - Encoded strings with fixed-width storage (utf8, latin1, ...) and/or
-  - Variable length strings (could share implementation with dtype=object, but are explicitly type-checked)
-  - One of these should probably be the default for text data. The current behavior on Python 3 is neither efficient nor user friendly.
-- `np.int` should not be platform dependent
-- better coercion for string + number
+  - Variable length strings (could share implementation with dtype=object,
+    but are explicitly type-checked)
+  - One of these should probably be the default for text data. The current
+    behavior on Python 3 is neither efficient nor user friendly.
 
-Random number generation policy & rewrite
------------------------------------------
 
-`NEP 19`_ and a `reference implementation`_
+Performance
+-----------
 
-Indexing
---------
+Improvements to NumPy's performance are important to many users. The primary
+topic at the moment is better use of SIMD instructions, also on platforms other
+than x86 - see :ref:`NEP38`.
 
-vindex/oindex `NEP 21`_
+Other performance improvement ideas include:
 
-Infrastructure
---------------
+- Reducing ufunc and ``__array_function__`` overhead.
+- Optimizations in individual functions.
+- A better story around parallel execution.
 
-NumPy is much more than just the code base itself, we also maintain
-docs, CI, benchmarks, etc.
+Furthermore we would like to improve the benchmarking system, in terms of coverage,
+easy of use, and publication of the results (now
+`here <https://pv.github.io/numpy-bench>`__) as part of the docs or website.
 
-- Rewrite numpy.org
-- Benchmarking: improve the extent of the existing suite, and run & render
-  the results as part of the docs or website.
 
-  - Hardware: find a machine that can reliably run serial benchmarks
-  - ASV produces graphs, could we set up a site? Currently at
-    https://pv.github.io/numpy-bench/, should that become a community resource?
+Website and documentation
+-------------------------
 
-Functionality outside core
---------------------------
+The NumPy `documentation <https://www.numpy.org/devdocs>`__ is of varying
+quality. The API documentation is in good shape; tutorials and high-level
+documentation on many topics are missing or outdated. See :ref:`NEP44` for
+planned improvements.
 
-Some things inside NumPy do not actually match the `Scope of NumPy`.
+Our website (https://numpy.org) was completely redesigned recently. We aim to
+further improve it by adding translations, better Hugo-Sphinx integration via a
+new Sphinx theme, and more (see `this tracking issue <https://github.com/numpy/numpy.org/issues/266>`__).
 
-- A backend system for `numpy.fft` (so that e.g. `fft-mkl` doesn't need to monkeypatch numpy)
 
-- Rewrite masked arrays to not be a ndarray subclass -- maybe in a separate project?
-- MaskedArray as a duck-array type, and/or
-- dtypes that support missing values
+User experience
+---------------
 
-- Write a strategy on how to deal with overlap between numpy and scipy for `linalg` and `fft` (and implement it).
+Type annotations
+````````````````
+We aim to add type annotations for all NumPy functionality, so users can use
+tools like `mypy`_ to type check their code and IDEs can improve their support
+for NumPy. The existing type stubs in the `numpy-stubs`_ repository are being
+improved and will be moved into the NumPy code base.
 
-- Deprecate `np.matrix`
+Platform support
+````````````````
+We aim to increase our support for different hardware architectures. This
+includes adding CI coverage when CI services are available, providing wheels on
+PyPI for ARM64 (``aarch64``) and POWER8/9 (``ppc64le``), providing better
+build and install documentation, and resolving build issues on other platforms
+like AIX.
 
-Continuous Integration
-----------------------
 
-We depend on CI to discover problems as we continue to develop NumPy before the
-code reaches downstream users.
+Maintenance
+-----------
 
-- CI for more exotic platforms (e.g. ARM is now available from
-  http://www.shippable.com/, but it is not free).
-- Multi-package testing
-- Add an official channel for numpy dev builds for CI usage by other projects so
-  they may confirm new builds do not break their package.
+- ``MaskedArray`` needs to be improved, ideas include:
 
-Typing
-------
+  - Rewrite masked arrays to not be a ndarray subclass -- maybe in a separate project?
+  - MaskedArray as a duck-array type, and/or
+  - dtypes that support missing values
 
-Python type annotation syntax should support ndarrays and dtypes.
+- Fortran integration via ``numpy.f2py`` requires a number of improvements, see
+  `this tracking issue <https://github.com/numpy/numpy/issues/14938>`__.
+- A backend system for ``numpy.fft`` (so that e.g. ``fft-mkl`` doesn't need to monkeypatch numpy).
+- Write a strategy on how to deal with overlap between NumPy and SciPy for ``linalg``.
+- Deprecate ``np.matrix`` (very slowly).
+- Add new indexing modes for "vectorized indexing" and "outer indexing" (see :ref:`NEP21`).
+- Make the polynomial API easier to use.
+- Integrate an improved text file loader.
+- Ufunc and gufunc improvements, see `gh-8892 <https://github.com/numpy/numpy/issues/8892>`__
+  and `gh-11492 <https://github.com/numpy/numpy/issues/11492>`__.
 
-- Type annotations for NumPy: github.com/numpy/numpy-stubs
-- Support for typing shape and dtype in multi-dimensional arrays in Python more generally
 
-NumPy scalars
--------------
-
-Numpy has both scalars and zero-dimensional arrays.
-
-- The current implementation adds a large maintenance burden -- can we remove
-  scalars and/or simplify it internally?
-- Zero dimensional arrays get converted into scalars by most NumPy
-  functions (i.e., output of `np.sin(x)` depends on whether `x` is
-  zero-dimensional or not).  This inconsistency should be addressed,
-  so that one could, e.g., write sane type annotations.
-
-.. _`NEP 19`: https://www.numpy.org/neps/nep-0019-rng-policy.html
-.. _`NEP 22`: http://www.numpy.org/neps/nep-0022-ndarray-duck-typing-overview.html
-.. _`NEP 18`: https://www.numpy.org/neps/nep-0018-array-function-protocol.html
-.. _implementation: https://gist.github.com/shoyer/1f0a308a06cd96df20879a1ddb8f0006
-.. _`reference implementation`: https://github.com/bashtage/randomgen
-.. _`NEP 21`: https://www.numpy.org/neps/nep-0021-advanced-indexing.html
+.. _`mypy`: https://mypy.readthedocs.io
+.. _`numpy-stubs`: https://github.com/numpy/numpy-stubs

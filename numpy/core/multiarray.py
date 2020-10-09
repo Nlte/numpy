@@ -11,11 +11,13 @@ import warnings
 
 from . import overrides
 from . import _multiarray_umath
-import numpy as np
-from numpy.core._multiarray_umath import *
-from numpy.core._multiarray_umath import (
+from ._multiarray_umath import *  # noqa: F403
+# These imports are needed for backward compatibility,
+# do not change them. issue gh-15518
+# _get_ndarray_c_version is semi-public, on purpose not added to __all__
+from ._multiarray_umath import (
     _fastCopyAndTranspose, _flagdict, _insert, _reconstruct, _vec_string,
-    _ARRAY_API, _monotonicity
+    _ARRAY_API, _monotonicity, _get_ndarray_c_version, _set_madvise_hugepage,
     )
 
 __all__ = [
@@ -30,13 +32,13 @@ __all__ = [
     'count_nonzero', 'c_einsum', 'datetime_as_string', 'datetime_data',
     'digitize', 'dot', 'dragon4_positional', 'dragon4_scientific', 'dtype',
     'empty', 'empty_like', 'error', 'flagsobj', 'flatiter', 'format_longfloat',
-    'frombuffer', 'fromfile', 'fromiter', 'fromstring', 'getbuffer', 'inner',
-    'int_asbuffer', 'interp', 'interp_complex', 'is_busday', 'lexsort',
+    'frombuffer', 'fromfile', 'fromiter', 'fromstring', 'inner',
+    'interp', 'interp_complex', 'is_busday', 'lexsort',
     'matmul', 'may_share_memory', 'min_scalar_type', 'ndarray', 'nditer',
-    'nested_iters', 'newbuffer', 'normalize_axis_index', 'packbits',
+    'nested_iters', 'normalize_axis_index', 'packbits',
     'promote_types', 'putmask', 'ravel_multi_index', 'result_type', 'scalar',
     'set_datetimeparse_function', 'set_legacy_print_mode', 'set_numeric_ops',
-    'set_string_function', 'set_typeDict', 'shares_memory', 'test_interrupt',
+    'set_string_function', 'set_typeDict', 'shares_memory',
     'tracemalloc_domain', 'typeinfo', 'unpackbits', 'unravel_index', 'vdot',
     'where', 'zeros']
 
@@ -71,9 +73,9 @@ array_function_from_c_func_and_dispatcher = functools.partial(
 
 
 @array_function_from_c_func_and_dispatcher(_multiarray_umath.empty_like)
-def empty_like(prototype, dtype=None, order=None, subok=None):
+def empty_like(prototype, dtype=None, order=None, subok=None, shape=None):
     """
-    empty_like(prototype, dtype=None, order='K', subok=True)
+    empty_like(prototype, dtype=None, order='K', subok=True, shape=None)
 
     Return a new array with the same shape and type as a given array.
 
@@ -97,6 +99,12 @@ def empty_like(prototype, dtype=None, order=None, subok=None):
         If True, then the newly created array will use the sub-class
         type of 'a', otherwise it will be a base-class array. Defaults
         to True.
+    shape : int or sequence of ints, optional.
+        Overrides the shape of the result. If order='K' and the number of
+        dimensions is unchanged, will try to keep order, otherwise,
+        order='C' is implied.
+
+        .. versionadded:: 1.17.0
 
     Returns
     -------
@@ -121,11 +129,11 @@ def empty_like(prototype, dtype=None, order=None, subok=None):
     --------
     >>> a = ([1,2,3], [4,5,6])                         # a is array-like
     >>> np.empty_like(a)
-    array([[-1073741821, -1073741821,           3],    # random
+    array([[-1073741821, -1073741821,           3],    # uninitialized
            [          0,           0, -1073741821]])
     >>> a = np.array([[1., 2., 3.],[4.,5.,6.]])
     >>> np.empty_like(a)
-    array([[ -2.00000715e+000,   1.48219694e-323,  -2.00000572e+000], # random
+    array([[ -2.00000715e+000,   1.48219694e-323,  -2.00000572e+000], # uninitialized
            [  4.38791518e-305,  -2.00000715e+000,   4.17269252e-309]])
 
     """
@@ -133,9 +141,9 @@ def empty_like(prototype, dtype=None, order=None, subok=None):
 
 
 @array_function_from_c_func_and_dispatcher(_multiarray_umath.concatenate)
-def concatenate(arrays, axis=None, out=None):
+def concatenate(arrays, axis=None, out=None, *, dtype=None, casting=None):
     """
-    concatenate((a1, a2, ...), axis=0, out=None)
+    concatenate((a1, a2, ...), axis=0, out=None, dtype=None, casting="same_kind")
 
     Join a sequence of arrays along an existing axis.
 
@@ -151,6 +159,16 @@ def concatenate(arrays, axis=None, out=None):
         If provided, the destination to place the result. The shape must be
         correct, matching that of what concatenate would have returned if no
         out argument were specified.
+    dtype : str or dtype
+        If provided, the destination array will have this dtype. Cannot be
+        provided together with `out`.
+
+        .. versionadded:: 1.20.0
+
+    casting : {'no', 'equiv', 'safe', 'same_kind', 'unsafe'}, optional
+        Controls what kind of data casting may occur. Defaults to 'same_kind'.
+
+        .. versionadded:: 1.20.0
 
     Returns
     -------
@@ -163,14 +181,15 @@ def concatenate(arrays, axis=None, out=None):
     array_split : Split an array into multiple sub-arrays of equal or
                   near-equal size.
     split : Split array into a list of multiple sub-arrays of equal size.
-    hsplit : Split array into multiple sub-arrays horizontally (column wise)
-    vsplit : Split array into multiple sub-arrays vertically (row wise)
+    hsplit : Split array into multiple sub-arrays horizontally (column wise).
+    vsplit : Split array into multiple sub-arrays vertically (row wise).
     dsplit : Split array into multiple sub-arrays along the 3rd axis (depth).
     stack : Stack a sequence of arrays along a new axis.
-    hstack : Stack arrays in sequence horizontally (column wise)
-    vstack : Stack arrays in sequence vertically (row wise)
-    dstack : Stack arrays in sequence depth wise (along third dimension)
     block : Assemble arrays from blocks.
+    hstack : Stack arrays in sequence horizontally (column wise).
+    vstack : Stack arrays in sequence vertically (row wise).
+    dstack : Stack arrays in sequence depth wise (along third dimension).
+    column_stack : Stack 1-D arrays as columns into a 2-D array.
 
     Notes
     -----
@@ -489,11 +508,15 @@ def can_cast(from_, to, casting=None):
 
     Notes
     -----
-    Starting in NumPy 1.9, can_cast function now returns False in 'safe'
-    casting mode for integer/float dtype and string dtype if the string dtype
-    length is not long enough to store the max integer/float value converted
-    to a string. Previously can_cast in 'safe' mode returned True for
-    integer/float dtype and a string dtype of any length.
+    .. versionchanged:: 1.17.0
+       Casting between a simple data type and a structured one is possible only
+       for "unsafe" casting.  Casting to multiple fields is allowed, but
+       casting from multiple fields is not.
+
+    .. versionchanged:: 1.9.0
+       Casting from numeric to string types in 'safe' casting mode requires
+       that the string dtype length is long enough to store the maximum
+       integer/float value converted.
 
     See also
     --------
@@ -748,6 +771,7 @@ def dot(a, b, out=None):
     tensordot : Sum products over arbitrary axes.
     einsum : Einstein summation convention.
     matmul : '@' operator as method with out parameter.
+    linalg.multi_dot : Chained dot product.
 
     Examples
     --------
@@ -897,8 +921,9 @@ def bincount(x, weights=None, minlength=None):
 
     >>> np.bincount(np.arange(5, dtype=float))
     Traceback (most recent call last):
-      File "<stdin>", line 1, in <module>
-    TypeError: array cannot be safely cast to required type
+      ...
+    TypeError: Cannot cast array data from dtype('float64') to dtype('int64')
+    according to the rule 'safe'
 
     A possible use of ``bincount`` is to perform sums over
     variable-size chunks of an array, using the ``weights`` keyword.
@@ -1075,7 +1100,7 @@ def putmask(a, mask, values):
 
     Parameters
     ----------
-    a : array_like
+    a : ndarray
         Target array.
     mask : array_like
         Boolean mask array. It has to be the same shape as `a`.
@@ -1107,9 +1132,9 @@ def putmask(a, mask, values):
 
 
 @array_function_from_c_func_and_dispatcher(_multiarray_umath.packbits)
-def packbits(myarray, axis=None):
+def packbits(a, axis=None, bitorder='big'):
     """
-    packbits(myarray, axis=None)
+    packbits(a, axis=None, bitorder='big')
 
     Packs the elements of a binary-valued array into bits in a uint8 array.
 
@@ -1117,12 +1142,19 @@ def packbits(myarray, axis=None):
 
     Parameters
     ----------
-    myarray : array_like
+    a : array_like
         An array of integers or booleans whose elements should be packed to
         bits.
     axis : int, optional
         The dimension over which bit-packing is done.
         ``None`` implies packing the flattened array.
+    bitorder : {'big', 'little'}, optional
+        The order of the input bits. 'big' will mimic bin(val),
+        ``[0, 0, 0, 0, 0, 0, 1, 1] => 3 = 0b00000011``, 'little' will
+        reverse the order so ``[1, 1, 0, 0, 0, 0, 0, 0] => 3``.
+        Defaults to 'big'.
+
+        .. versionadded:: 1.17.0
 
     Returns
     -------
@@ -1154,28 +1186,47 @@ def packbits(myarray, axis=None):
     and 32 = 0010 0000.
 
     """
-    return (myarray,)
+    return (a,)
 
 
 @array_function_from_c_func_and_dispatcher(_multiarray_umath.unpackbits)
-def unpackbits(myarray, axis=None):
+def unpackbits(a, axis=None, count=None, bitorder='big'):
     """
-    unpackbits(myarray, axis=None)
+    unpackbits(a, axis=None, count=None, bitorder='big')
 
     Unpacks elements of a uint8 array into a binary-valued output array.
 
-    Each element of `myarray` represents a bit-field that should be unpacked
-    into a binary-valued output array. The shape of the output array is either
-    1-D (if `axis` is None) or the same shape as the input array with unpacking
-    done along the axis specified.
+    Each element of `a` represents a bit-field that should be unpacked
+    into a binary-valued output array. The shape of the output array is
+    either 1-D (if `axis` is ``None``) or the same shape as the input
+    array with unpacking done along the axis specified.
 
     Parameters
     ----------
-    myarray : ndarray, uint8 type
+    a : ndarray, uint8 type
        Input array.
     axis : int, optional
         The dimension over which bit-unpacking is done.
         ``None`` implies unpacking the flattened array.
+    count : int or None, optional
+        The number of elements to unpack along `axis`, provided as a way
+        of undoing the effect of packing a size that is not a multiple
+        of eight. A non-negative number means to only unpack `count`
+        bits. A negative number means to trim off that many bits from
+        the end. ``None`` means to unpack the entire array (the
+        default). Counts larger than the available number of bits will
+        add zero padding to the output. Negative counts must not
+        exceed the available number of bits.
+
+        .. versionadded:: 1.17.0
+
+    bitorder : {'big', 'little'}, optional
+        The order of the returned bits. 'big' will mimic bin(val),
+        ``3 = 0b00000011 => [0, 0, 0, 0, 0, 0, 1, 1]``, 'little' will reverse
+        the order to ``[1, 1, 0, 0, 0, 0, 0, 0]``.
+        Defaults to 'big'.
+
+        .. versionadded:: 1.17.0
 
     Returns
     -------
@@ -1184,8 +1235,8 @@ def unpackbits(myarray, axis=None):
 
     See Also
     --------
-    packbits : Packs the elements of a binary-valued array into bits in a uint8
-               array.
+    packbits : Packs the elements of a binary-valued array into bits in
+               a uint8 array.
 
     Examples
     --------
@@ -1199,9 +1250,27 @@ def unpackbits(myarray, axis=None):
     array([[0, 0, 0, 0, 0, 0, 1, 0],
            [0, 0, 0, 0, 0, 1, 1, 1],
            [0, 0, 0, 1, 0, 1, 1, 1]], dtype=uint8)
+    >>> c = np.unpackbits(a, axis=1, count=-3)
+    >>> c
+    array([[0, 0, 0, 0, 0],
+           [0, 0, 0, 0, 0],
+           [0, 0, 0, 1, 0]], dtype=uint8)
+
+    >>> p = np.packbits(b, axis=0)
+    >>> np.unpackbits(p, axis=0)
+    array([[0, 0, 0, 0, 0, 0, 1, 0],
+           [0, 0, 0, 0, 0, 1, 1, 1],
+           [0, 0, 0, 1, 0, 1, 1, 1],
+           [0, 0, 0, 0, 0, 0, 0, 0],
+           [0, 0, 0, 0, 0, 0, 0, 0],
+           [0, 0, 0, 0, 0, 0, 0, 0],
+           [0, 0, 0, 0, 0, 0, 0, 0],
+           [0, 0, 0, 0, 0, 0, 0, 0]], dtype=uint8)
+    >>> np.array_equal(b, np.unpackbits(p, axis=0, count=b.shape[0]))
+    True
 
     """
-    return (myarray,)
+    return (a,)
 
 
 @array_function_from_c_func_and_dispatcher(_multiarray_umath.shares_memory)
@@ -1209,7 +1278,13 @@ def shares_memory(a, b, max_work=None):
     """
     shares_memory(a, b, max_work=None)
 
-    Determine if two arrays share memory
+    Determine if two arrays share memory.
+
+    .. warning::
+
+       This function can be exponentially slow for some inputs, unless
+       `max_work` is set to a finite number or ``MAY_SHARE_BOUNDS``.
+       If in doubt, use `numpy.may_share_memory` instead.
 
     Parameters
     ----------
@@ -1222,7 +1297,8 @@ def shares_memory(a, b, max_work=None):
 
         max_work=MAY_SHARE_EXACT  (default)
             The problem is solved exactly. In this case, the function returns
-            True only if there is an element shared between the arrays.
+            True only if there is an element shared between the arrays. Finding
+            the exact solution may take extremely long in some cases.
         max_work=MAY_SHARE_BOUNDS
             Only the memory bounds of a and b are checked.
 
@@ -1241,8 +1317,32 @@ def shares_memory(a, b, max_work=None):
 
     Examples
     --------
-    >>> np.may_share_memory(np.array([1,2]), np.array([5,8,9]))
+    >>> x = np.array([1, 2, 3, 4])
+    >>> np.shares_memory(x, np.array([5, 6, 7]))
     False
+    >>> np.shares_memory(x[::2], x)
+    True
+    >>> np.shares_memory(x[::2], x[1::2])
+    False
+
+    Checking whether two arrays share memory is NP-complete, and
+    runtime may increase exponentially in the number of
+    dimensions. Hence, `max_work` should generally be set to a finite
+    number, as it is possible to construct examples that take
+    extremely long to run:
+
+    >>> from numpy.lib.stride_tricks import as_strided
+    >>> x = np.zeros([192163377], dtype=np.int8)
+    >>> x1 = as_strided(x, strides=(36674, 61119, 85569), shape=(1049, 1049, 1049))
+    >>> x2 = as_strided(x[64023025:], strides=(12223, 12224, 1), shape=(1049, 1049, 1))
+    >>> np.shares_memory(x1, x2, max_work=1000)
+    Traceback (most recent call last):
+    ...
+    numpy.TooHardError: Exceeded max_work
+
+    Running ``np.shares_memory(x1, x2)`` without `max_work` set takes
+    around 1 minute for this case. It is possible to find problems
+    that take still significantly longer.
 
     """
     return (a, b)

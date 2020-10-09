@@ -11,6 +11,7 @@
 #define _MULTIARRAYMODULE
 #include "numpy/arrayobject.h"
 #include "numpy/arrayscalars.h"
+#include "iterators.h"
 
 #include "npy_config.h"
 
@@ -35,7 +36,7 @@ PyArray_Item_INCREF(char *data, PyArray_Descr *descr)
         return;
     }
     if (descr->type_num == NPY_OBJECT) {
-        NPY_COPY_PYOBJECT_PTR(&temp, data);
+        memcpy(&temp, data, sizeof(temp));
         Py_XINCREF(temp);
     }
     else if (PyDataType_HASFIELDS(descr)) {
@@ -45,7 +46,7 @@ PyArray_Item_INCREF(char *data, PyArray_Descr *descr)
         Py_ssize_t pos = 0;
 
         while (PyDict_Next(descr->fields, &pos, &key, &value)) {
-            if NPY_TITLE_KEY(key, value) {
+            if (NPY_TITLE_KEY(key, value)) {
                 continue;
             }
             if (!PyArg_ParseTuple(value, "Oi|O", &new, &offset,
@@ -97,7 +98,7 @@ PyArray_Item_XDECREF(char *data, PyArray_Descr *descr)
     }
 
     if (descr->type_num == NPY_OBJECT) {
-        NPY_COPY_PYOBJECT_PTR(&temp, data);
+        memcpy(&temp, data, sizeof(temp));
         Py_XDECREF(temp);
     }
     else if (PyDataType_HASFIELDS(descr)) {
@@ -107,7 +108,7 @@ PyArray_Item_XDECREF(char *data, PyArray_Descr *descr)
             Py_ssize_t pos = 0;
 
             while (PyDict_Next(descr->fields, &pos, &key, &value)) {
-                if NPY_TITLE_KEY(key, value) {
+                if (NPY_TITLE_KEY(key, value)) {
                     continue;
                 }
                 if (!PyArg_ParseTuple(value, "Oi|O", &new, &offset,
@@ -180,7 +181,7 @@ PyArray_INCREF(PyArrayObject *mp)
         }
         else {
             for( i = 0; i < n; i++, data++) {
-                NPY_COPY_PYOBJECT_PTR(&temp, data);
+                memcpy(&temp, data, sizeof(temp));
                 Py_XINCREF(temp);
             }
         }
@@ -191,7 +192,7 @@ PyArray_INCREF(PyArrayObject *mp)
             return -1;
         }
         while(it->index < it->size) {
-            NPY_COPY_PYOBJECT_PTR(&temp, it->dataptr);
+            memcpy(&temp, it->dataptr, sizeof(temp));
             Py_XINCREF(temp);
             PyArray_ITER_NEXT(it);
         }
@@ -210,21 +211,22 @@ PyArray_XDECREF(PyArrayObject *mp)
     npy_intp i, n;
     PyObject **data;
     PyObject *temp;
-    PyArrayIterObject *it;
+    /*
+     * statically allocating it allows this function to not modify the
+     * reference count of the array for use during dealloc.
+     * (statically is not necessary as such)
+     */
+    PyArrayIterObject it;
 
     if (!PyDataType_REFCHK(PyArray_DESCR(mp))) {
         return 0;
     }
     if (PyArray_DESCR(mp)->type_num != NPY_OBJECT) {
-        it = (PyArrayIterObject *)PyArray_IterNew((PyObject *)mp);
-        if (it == NULL) {
-            return -1;
+        PyArray_RawIterBaseInit(&it, mp);
+        while(it.index < it.size) {
+            PyArray_Item_XDECREF(it.dataptr, PyArray_DESCR(mp));
+            PyArray_ITER_NEXT(&it);
         }
-        while(it->index < it->size) {
-            PyArray_Item_XDECREF(it->dataptr, PyArray_DESCR(mp));
-            PyArray_ITER_NEXT(it);
-        }
-        Py_DECREF(it);
         return 0;
     }
 
@@ -236,22 +238,18 @@ PyArray_XDECREF(PyArrayObject *mp)
         }
         else {
             for (i = 0; i < n; i++, data++) {
-                NPY_COPY_PYOBJECT_PTR(&temp, data);
+                memcpy(&temp, data, sizeof(temp));
                 Py_XDECREF(temp);
             }
         }
     }
     else { /* handles misaligned data too */
-        it = (PyArrayIterObject *)PyArray_IterNew((PyObject *)mp);
-        if (it == NULL) {
-            return -1;
-        }
-        while(it->index < it->size) {
-            NPY_COPY_PYOBJECT_PTR(&temp, it->dataptr);
+        PyArray_RawIterBaseInit(&it, mp);
+        while(it.index < it.size) {
+            memcpy(&temp, it.dataptr, sizeof(temp));
             Py_XDECREF(temp);
-            PyArray_ITER_NEXT(it);
+            PyArray_ITER_NEXT(&it);
         }
-        Py_DECREF(it);
     }
     return 0;
 }
@@ -294,24 +292,26 @@ static void
 _fillobject(char *optr, PyObject *obj, PyArray_Descr *dtype)
 {
     if (!PyDataType_FLAGCHK(dtype, NPY_ITEM_REFCOUNT)) {
-        if ((obj == Py_None) || (PyInt_Check(obj) && PyInt_AsLong(obj)==0)) {
+        PyObject *arr;
+
+        if ((obj == Py_None) ||
+                (PyLong_Check(obj) && PyLong_AsLong(obj) == 0)) {
             return;
         }
-        else {
-            PyObject *arr;
-            Py_INCREF(dtype);
-            arr = PyArray_NewFromDescr(&PyArray_Type, dtype,
-                                       0, NULL, NULL, NULL,
-                                       0, NULL);
-            if (arr!=NULL) {
-                dtype->f->setitem(obj, optr, arr);
-            }
-            Py_XDECREF(arr);
+        /* Clear possible long conversion error */
+        PyErr_Clear();
+        Py_INCREF(dtype);
+        arr = PyArray_NewFromDescr(&PyArray_Type, dtype,
+                                   0, NULL, NULL, NULL,
+                                   0, NULL);
+        if (arr!=NULL) {
+            dtype->f->setitem(obj, optr, arr);
         }
+        Py_XDECREF(arr);
     }
     if (dtype->type_num == NPY_OBJECT) {
         Py_XINCREF(obj);
-        NPY_COPY_PYOBJECT_PTR(optr, &obj);
+        memcpy(optr, &obj, sizeof(obj));
     }
     else if (PyDataType_HASFIELDS(dtype)) {
         PyObject *key, *value, *title = NULL;
@@ -320,7 +320,7 @@ _fillobject(char *optr, PyObject *obj, PyArray_Descr *dtype)
         Py_ssize_t pos = 0;
 
         while (PyDict_Next(dtype->fields, &pos, &key, &value)) {
-            if NPY_TITLE_KEY(key, value) {
+            if (NPY_TITLE_KEY(key, value)) {
                 continue;
             }
             if (!PyArg_ParseTuple(value, "Oi|O", &new, &offset, &title)) {

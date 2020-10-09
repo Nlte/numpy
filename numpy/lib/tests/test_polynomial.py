@@ -1,5 +1,3 @@
-from __future__ import division, absolute_import, print_function
-
 import numpy as np
 from numpy.testing import (
     assert_, assert_equal, assert_array_equal, assert_almost_equal,
@@ -7,7 +5,7 @@ from numpy.testing import (
     )
 
 
-class TestPolynomial(object):
+class TestPolynomial:
     def test_poly1d_str_and_repr(self):
         p = np.poly1d([1., 2, 3])
         assert_equal(repr(p), 'poly1d([1., 2., 3.])')
@@ -245,17 +243,26 @@ class TestPolynomial(object):
         assert_equal(q.coeffs.dtype, np.complex128)
         assert_equal(r.coeffs.dtype, np.complex128)
         assert_equal(q*a + r, b)
+        
+        c = [1, 2, 3]
+        d = np.poly1d([1, 2, 3])
+        s, t = np.polydiv(c, d)
+        assert isinstance(s, np.poly1d)
+        assert isinstance(t, np.poly1d)
+        u, v = np.polydiv(d, c)
+        assert isinstance(u, np.poly1d)
+        assert isinstance(v, np.poly1d)
 
-    def test_poly_coeffs_immutable(self):
-        """ Coefficients should not be modifiable """
+    def test_poly_coeffs_mutable(self):
+        """ Coefficients should be modifiable """
         p = np.poly1d([1, 2, 3])
 
-        try:
-            # despite throwing an exception, this used to change state
-            p.coeffs += 1
-        except Exception:
-            pass
-        assert_equal(p.coeffs, [1, 2, 3])
+        p.coeffs += 1
+        assert_equal(p.coeffs, [2, 3, 4])
 
         p.coeffs[2] += 10
-        assert_equal(p.coeffs, [1, 2, 3])
+        assert_equal(p.coeffs, [2, 3, 14])
+
+        # this never used to be allowed - let's not add features to deprecated
+        # APIs
+        assert_raises(AttributeError, setattr, p, 'coeffs', np.array(1))

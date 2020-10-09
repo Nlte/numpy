@@ -9,7 +9,7 @@ The N-dimensional array (:class:`ndarray`)
 An :class:`ndarray` is a (usually fixed-size) multidimensional
 container of items of the same type and size. The number of dimensions
 and items in an array is defined by its :attr:`shape <ndarray.shape>`,
-which is a :class:`tuple` of *N* positive integers that specify the
+which is a :class:`tuple` of *N* non-negative integers that specify the
 sizes of each dimension. The type of items in the array is specified by
 a separate :ref:`data-type object (dtype) <arrays.dtypes>`, one of which
 is associated with each ndarray.
@@ -37,7 +37,7 @@ objects implementing the :class:`buffer` or :ref:`array
 
    >>> x = np.array([[1, 2, 3], [4, 5, 6]], np.int32)
    >>> type(x)
-   <type 'numpy.ndarray'>
+   <class 'numpy.ndarray'>
    >>> x.shape
    (2, 3)
    >>> x.dtype
@@ -47,6 +47,7 @@ objects implementing the :class:`buffer` or :ref:`array
 
    >>> # The element of x in the *second* row, *third* column, namely, 6.
    >>> x[1, 2]
+   6
 
    For example :ref:`slicing <arrays.indexing>` can produce views of
    the array:
@@ -82,9 +83,11 @@ Indexing arrays
 
 Arrays can be indexed using an extended Python slicing syntax,
 ``array[selection]``.  Similar syntax is also used for accessing
-fields in a :ref:`structured array <arrays.dtypes.field>`.
+fields in a :term:`structured data type`.
 
 .. seealso:: :ref:`Array Indexing <arrays.indexing>`.
+
+.. _memory-layout:
 
 Internal memory layout of an ndarray
 ====================================
@@ -127,8 +130,13 @@ strided scheme, and correspond to memory that can be *addressed* by the strides:
 where :math:`d_j` `= self.shape[j]`.
 
 Both the C and Fortran orders are :term:`contiguous`, *i.e.,*
-:term:`single-segment`, memory layouts, in which every part of the
+single-segment, memory layouts, in which every part of the
 memory block can be accessed by some combination of the indices.
+
+.. note::
+
+    `Contiguous arrays` and `single-segment arrays` are synonymous
+    and are used interchangeably throughout the documentation.
 
 While a C-style and Fortran-style contiguous array, which has the corresponding
 flags set, can be addressed with the above strides, the actual strides may be
@@ -143,21 +151,24 @@ different. This can happen in two cases:
        considered C-style and Fortran-style contiguous.
 
 Point 1. means that ``self`` and ``self.squeeze()`` always have the same
-contiguity and :term:`aligned` flags value. This also means that even a high
-dimensional array could be C-style and Fortran-style contiguous at the same
-time.
+contiguity and ``aligned`` flags value. This also means
+that even a high dimensional array could be C-style and Fortran-style
+contiguous at the same time.
 
 .. index:: aligned
 
 An array is considered aligned if the memory offsets for all elements and the
-base offset itself is a multiple of `self.itemsize`.
+base offset itself is a multiple of `self.itemsize`. Understanding
+`memory-alignment` leads to better performance on most hardware.
 
 .. note::
 
-    Points (1) and (2) are not yet applied by default. Beginning with
-    NumPy 1.8.0, they are applied consistently only if the environment
-    variable ``NPY_RELAXED_STRIDES_CHECKING=1`` was defined when NumPy
-    was built. Eventually this will become the default.
+    Points (1) and (2) can currently be disabled by the compile time
+    environmental variable ``NPY_RELAXED_STRIDES_CHECKING=0``,
+    which was the default before NumPy 1.10.
+    No users should have to do this. ``NPY_RELAXED_STRIDES_DEBUG=1``
+    can be used to help find errors when incorrectly relying on the strides
+    in C-extension code (see below warning).
 
     You can check whether this option was enabled when your NumPy was
     built by looking at the value of ``np.ones((10,1),
@@ -326,7 +337,7 @@ Item selection and manipulation
 -------------------------------
 
 For array methods that take an *axis* keyword, it defaults to
-:const:`None`. If axis is *None*, then the array is treated as a 1-D
+*None*. If axis is *None*, then the array is treated as a 1-D
 array. Any other value for *axis* represents the dimension along which
 the operation should proceed.
 
@@ -368,6 +379,7 @@ Many of these methods take an argument named *axis*. In such cases,
    A 3-dimensional array of size 3 x 3 x 3, summed over each of its
    three axes
 
+   >>> x = np.arange(27).reshape((3,3,3))
    >>> x
    array([[[ 0,  1,  2],
            [ 3,  4,  5],
@@ -441,7 +453,7 @@ Each of the arithmetic operations (``+``, ``-``, ``*``, ``/``, ``//``,
 ``%``, ``divmod()``, ``**`` or ``pow()``, ``<<``, ``>>``, ``&``,
 ``^``, ``|``, ``~``) and the comparisons (``==``, ``<``, ``>``,
 ``<=``, ``>=``, ``!=``) is equivalent to the corresponding
-:term:`universal function` (or :term:`ufunc` for short) in NumPy.  For
+universal function (or :term:`ufunc` for short) in NumPy.  For
 more information, see the section on :ref:`Universal Functions
 <ufuncs>`.
 
@@ -508,10 +520,6 @@ Arithmetic:
 
    - Any third argument to :func:`pow()` is silently ignored,
      as the underlying :func:`ufunc <power>` takes only two arguments.
-
-   - The three division operators are all defined; :obj:`div` is active
-     by default, :obj:`truediv` is active when
-     :obj:`__future__` division is in effect.
 
    - Because :class:`ndarray` is a built-in type (written in C), the
      ``__r{op}__`` special methods are not directly defined.

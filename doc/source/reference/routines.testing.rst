@@ -1,5 +1,3 @@
-.. _numpy-testing:
-
 .. module:: numpy.testing
 
 Test Support (:mod:`numpy.testing`)
@@ -39,11 +37,11 @@ Decorators
 .. autosummary::
    :toctree: generated/
 
-   decorators.deprecated
-   decorators.knownfailureif
-   decorators.setastest
-   decorators.skipif
-   decorators.slow
+   dec.deprecated
+   dec.knownfailureif
+   dec.setastest
+   dec.skipif
+   dec.slow
    decorate_methods
 
 Test Running
